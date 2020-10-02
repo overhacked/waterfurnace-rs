@@ -2,11 +2,14 @@ use thiserror::Error;
 
 use http::{HeaderMap, HeaderValue, header::{COOKIE}};
 use reqwest;
+use tracing;
+use tracing_futures;
 
 use std::time::Duration;
 
 const LOGIN_URI: &str = "https://symphony.mywaterfurnace.com/account/login";
 
+#[derive(Debug)]
 pub struct Session<S: SessionState> {
     client: reqwest::Client,
     credentials: Option<Login>,
@@ -35,6 +38,7 @@ impl Session<Start> {
         }
     }
 
+    #[tracing::instrument(fields(password="REDACTED"))]
     pub async fn login(self, username: &str, password: &str)
         -> Result<Session<Login>>
     {
@@ -90,6 +94,7 @@ impl Session<Start> {
 }
 
 impl Session<Login> {
+    #[tracing::instrument]
     pub async fn logout(self)
         -> Result<Session<Start>>
     {
@@ -122,13 +127,25 @@ impl Session<Login> {
 }
 
 // State type options
+#[derive(Debug)]
 pub struct Start; // Initial state
 pub struct Login { // HTTP login completed; websocket not connected
     username: String,
     password: String,
     session_id: String,
 }
+impl std::fmt::Debug for Login {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Login")
+            .field("username", &self.username)
+            .field("password", &"REDACTED")
+            .field("session_id", &self.session_id)
+            .finish()
+    }
+}
+#[derive(Debug)]
 pub struct Connected {} // "Running" state: logged in and websocket connected
+#[derive(Debug)]
 pub struct Disconnected {} // A possible error state
 
 pub trait SessionState {}
