@@ -8,6 +8,7 @@ use tracing_futures;
 use std::time::Duration;
 
 const LOGIN_URI: &str = "https://symphony.mywaterfurnace.com/account/login";
+const AWLCONFIG_URI: &str = "https://symphony.mywaterfurnace.com/assets/js/awlconfig.js.php";
 
 #[derive(Debug)]
 pub struct Session<S: SessionState> {
@@ -56,28 +57,11 @@ impl Session<Start> {
             .send().await;
 
         match login_result.and_then(|r| r.error_for_status()) {
-            Err(e) if e.is_status() => {
-                let status = e.status().unwrap();
-                Err(SessionError::LoginFailed {
-                    status: status,
-                    reason: status.canonical_reason().unwrap_or("Unknown").to_string(),
-                })
-            },
-            Err(e) => {
-                if let Some(url) = e.url() {
-                    let host = url.host_str().unwrap_or(url.as_str());
-                    Err(SessionError::ConnectionFailed(host.to_string()))
-                } else {
-                    Err(SessionError::ConnectionFailed("Unknown".to_string()))
-                }
-            },
+            Err(e) => Err(SessionError::Http(e)),
             Ok(response) => {
                 let session_cookie = response.cookies().find(|c| c.name() == "sessionid");
                 match session_cookie {
-                    None => Err(SessionError::LoginFailed {
-                        status: response.status(),
-                        reason: "Response did not contain `sessionid` cookie.".to_string(),
-                    }),
+                    None => Err(SessionError::InvalidCredentials("Response did not contain `sessionid` cookie.".to_string())),
                     Some(session_cookie) => Ok(Session {
                         client: self.client,
                         credentials: Some(Login {
@@ -104,21 +88,7 @@ impl Session<Login> {
             .timeout(Duration::from_secs(2))
             .send().await;
         match logout_result.and_then(|r| r.error_for_status()) {
-            Err(e) if e.is_status() => {
-                let status = e.status().unwrap();
-                Err(SessionError::LogoutFailed {
-                    status: status,
-                    reason: status.canonical_reason().unwrap_or("Unknown").to_string(),
-                })
-            },
-            Err(e) => {
-                if let Some(url) = e.url() {
-                    let host = url.host_str().unwrap_or(url.as_str());
-                    Err(SessionError::ConnectionFailed(host.to_string()))
-                } else {
-                    Err(SessionError::ConnectionFailed("Unknown".to_string()))
-                }
-            },
+            Err(e) => Err(SessionError::Http(e)),
             Ok(_) => {
                 Ok(Session::<Start>::new())
             }
@@ -156,20 +126,11 @@ impl SessionState for Disconnected {}
 
 #[derive(Error, Debug)]
 pub enum SessionError {
-    #[error("Unable to connect to AWL (host {0})")]
-    ConnectionFailed(String),
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
     
-    #[error("Login failed: [{status}] {reason}")]
-    LoginFailed {
-        status: reqwest::StatusCode,
-        reason: String
-    },
-    
-    #[error("Logout failed: [{status}] {reason}")]
-    LogoutFailed {
-        status: reqwest::StatusCode,
-        reason: String
-    },
+    #[error("Login failed: {0}")]
+    InvalidCredentials(String),
 }
 
 type Result<T> = std::result::Result<T, SessionError>;
