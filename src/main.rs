@@ -21,15 +21,11 @@ async fn main() -> Result<()> {
 
     let opt = Opt::from_args();
 
-    let session = wf::Session::new()
-        .login(&opt.username, &opt.password).await?;
+    let mut session = wf::SessionManager::new(&opt.username, &opt.password).await?;
+    println!("{:?}", session);
 
-    let session = session.connect().await?;
-
-    let session = session.close().await?;
-
-    // println!("{:?}", session.get_websockets_uri().await?);
     session.logout().await?;
+    println!("{:?}", session);
 
     Ok(())
 }

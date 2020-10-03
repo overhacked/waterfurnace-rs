@@ -19,8 +19,6 @@ type WebSocketStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::May
 
 const LOGIN_URI: &str = "https://symphony.mywaterfurnace.com/account/login";
 const AWLCONFIG_URI: &str = "https://symphony.mywaterfurnace.com/assets/js/awlconfig.js.php";
-// Taken from setTimeout(1500000, ...) in Symphony JavaScript
-const SESSION_TIMEOUT: Duration = Duration::from_millis(1500000);
 
 #[derive(Debug)]
 pub struct Session<S: state::SessionState> {
@@ -244,7 +242,7 @@ pub enum SessionError {
     UnexpectedValue(String),
 }
 
-type Result<T> = std::result::Result<T, SessionError>;
+pub type Result<T> = std::result::Result<T, SessionError>;
 
 #[cfg(test)]
 mod tests {
