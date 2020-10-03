@@ -2,8 +2,8 @@ use futures::future;
 use tokio::sync::Mutex;
 
 use crate::Session;
-use crate::client::Result as SessionResult;
-use crate::client::state;
+use crate::session::Result as SessionResult;
+use crate::session::state;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -111,7 +111,7 @@ impl SessionManager {
             }
             // Explicit return type required to use ? operator in async block
             // See https://rust-lang.github.io/async-book/07_workarounds/02_err_in_async_blocks.html
-            Ok::<(), crate::client::SessionError>(())
+            Ok::<(), crate::session::SessionError>(())
         });
         tokio::spawn(timeout_fut);
         timeout_handle

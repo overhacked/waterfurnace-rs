@@ -1,7 +1,7 @@
 #![deny(missing_debug_implementations)]
 
-mod client;
+mod session;
 mod manager;
 
-pub use client::Session;
+pub use session::Session;
 pub use manager::SessionManager;
