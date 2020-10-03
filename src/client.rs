@@ -49,7 +49,7 @@ impl Session<state::Start> {
         }
     }
 
-    #[tracing::instrument(fields(password="REDACTED"))]
+    #[tracing::instrument(fields(password="********"))]
     pub async fn login(self, username: &str, password: &str)
         -> Result<Session<state::Login>>
     {
@@ -199,7 +199,7 @@ pub mod state {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("Login")
                 .field("username", &self.username)
-                .field("password", &"REDACTED
+                .field("password", &"********")
                 .field("session_id", &self.session_id)
                 .finish()
         }
