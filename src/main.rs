@@ -24,6 +24,11 @@ async fn main() -> Result<()> {
     let session = wf::Session::new()
         .login(&opt.username, &opt.password).await?;
 
+    let session = session.connect().await?;
+
+    let session = session.close().await?;
+
+    // println!("{:?}", session.get_websockets_uri().await?);
     session.logout().await?;
 
     Ok(())
