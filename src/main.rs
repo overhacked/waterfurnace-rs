@@ -21,7 +21,8 @@ async fn main() -> Result<()> {
 
     let opt = Opt::from_args();
 
-    let mut session = wf::SessionManager::new(&opt.username, &opt.password).await?;
+    let mut session = wf::SessionManager::new(&opt.username, &opt.password);
+    session.login().await?;
     println!("{:?}", session);
 
     session.logout().await?;
