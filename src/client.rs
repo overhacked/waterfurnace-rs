@@ -23,12 +23,12 @@ const AWLCONFIG_URI: &str = "https://symphony.mywaterfurnace.com/assets/js/awlco
 const SESSION_TIMEOUT: Duration = Duration::from_millis(1500000);
 
 #[derive(Debug)]
-pub struct Session<S: SessionState> {
+pub struct Session<S: state::SessionState> {
     state: S,
     client: reqwest::Client,
 }
 
-impl Session<Start> {
+impl Session<state::Start> {
     pub fn new() -> Self {
         let redirect_policy =
             reqwest::redirect::Policy::custom(|attempt| {
@@ -40,7 +40,7 @@ impl Session<Start> {
                 }
             });
         Session {
-            state: Start{},
+            state: state::Start{},
             client: {reqwest::Client::builder()
                 .cookie_store(true)
                 .redirect(redirect_policy)
@@ -51,7 +51,7 @@ impl Session<Start> {
 
     #[tracing::instrument(fields(password="REDACTED"))]
     pub async fn login(self, username: &str, password: &str)
-        -> Result<Session<Login>>
+        -> Result<Session<state::Login>>
     {
         let mut login_headers = HeaderMap::new();
         login_headers.insert(COOKIE, HeaderValue::from_str("legal-acknowledge=yes").unwrap());
@@ -73,7 +73,7 @@ impl Session<Start> {
                 match session_cookie {
                     None => Err(SessionError::InvalidCredentials("Response did not contain `sessionid` cookie.".to_string())),
                     Some(session_cookie) => Ok(Session {
-                        state: Login {
+                        state: state::Login {
                             username: username.to_string(),
                             password: password.to_string(),
                             session_id: session_cookie.value().to_string(),
@@ -86,10 +86,10 @@ impl Session<Start> {
     }
 }
 
-impl Session<Login> {
+impl Session<state::Login> {
     #[tracing::instrument]
     pub async fn logout(self)
-        -> Result<Session<Start>>
+        -> Result<Session<state::Start>>
     {
         let mut logout_uri = reqwest::Url::parse(LOGIN_URI).unwrap();
         logout_uri.set_query(Some("op=logout"));
@@ -100,7 +100,7 @@ impl Session<Login> {
             Err(e) => Err(SessionError::Http(e)),
             Ok(_) => {
                 Ok(Session {
-                    state: Start {},
+                    state: state::Start {},
                     client: self.client,
                 })
             }
@@ -109,12 +109,12 @@ impl Session<Login> {
 
     #[tracing::instrument]
     pub async fn connect(self)
-        -> Result<Session<Connected>>
+        -> Result<Session<state::Connected>>
     {
         let ws_url = self.get_websockets_uri().await?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await.map_err(|e| SessionError::WebSockets(e))?;
         Ok(Session {
-            state: Connected {
+            state: state::Connected {
                 credentials: self.state,
                 websocket: ws_stream,
             },
@@ -144,10 +144,10 @@ impl Session<Login> {
     }
 }
 
-impl Session<Connected> {
+impl Session<state::Connected> {
     #[tracing::instrument]
     pub async fn close(mut self)
-        -> Result<Session<Login>>
+        -> Result<Session<state::Login>>
     {
         self.state.websocket.close(None).await?;
 
@@ -159,14 +159,14 @@ impl Session<Connected> {
 
     #[tracing::instrument]
     pub async fn logout(self)
-        -> Result<Session<Disconnected>>
+        -> Result<Session<state::Disconnected>>
     {
         let credentials = self.state.credentials.clone();
         let login_session = self.close().await?;
         let start_session = login_session.logout().await?;
 
         Ok(Session {
-            state: Disconnected {
+            state: state::Disconnected {
                 credentials: credentials,
             },
             client: start_session.client,
@@ -174,9 +174,9 @@ impl Session<Connected> {
     }
 }
 
-impl Session<Disconnected> {
+impl Session<state::Disconnected> {
     pub async fn login(self)
-        -> Result<Session<Login>>
+        -> Result<Session<state::Login>>
     {
         Session::new().login(
             &self.state.credentials.username,
@@ -186,45 +186,47 @@ impl Session<Disconnected> {
 }
 
 // State type options
-#[derive(Debug)]
-pub struct Start; // Initial state
-#[derive(Clone)]
-pub struct Login { // HTTP login completed; websocket not connected
-    username: String,
-    password: String,
-    session_id: String,
-}
-impl std::fmt::Debug for Login {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Login")
-            .field("username", &self.username)
-            .field("password", &"REDACTED")
-            .field("session_id", &self.session_id)
-            .finish()
+pub mod state {
+    #[derive(Debug)]
+    pub struct Start; // Initial state
+    #[derive(Clone)]
+    pub struct Login { // HTTP login completed; websocket not connected
+        pub(super) username: String,
+        pub(super) password: String,
+        pub(super) session_id: String,
     }
-}
-pub struct Connected { // "Running" state: logged in and websocket connected
-    credentials: Login,
-    websocket: WebSocketStream,
-}
-impl std::fmt::Debug for Connected {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Connected")
-            .field("credentials", &self.credentials)
-            .field("websocket", &"SOCKET")
-            .finish()
+    impl std::fmt::Debug for Login {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Login")
+                .field("username", &self.username)
+                .field("password", &"REDACTED
+                .field("session_id", &self.session_id)
+                .finish()
+        }
     }
-}
-#[derive(Debug)]
-pub struct Disconnected { // A possible error state
-    credentials: Login,
-}
+    pub struct Connected { // "Running" state: logged in and websocket connected
+        pub(super) credentials: Login,
+        pub(super) websocket: super::WebSocketStream,
+    }
+    impl std::fmt::Debug for Connected {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Connected")
+                .field("credentials", &self.credentials)
+                .field("websocket", &"SOCKET")
+                .finish()
+        }
+    }
+    #[derive(Debug)]
+    pub struct Disconnected { // A possible error state
+        pub(super) credentials: Login,
+    }
 
-pub trait SessionState {}
-impl SessionState for Start {}
-impl SessionState for Login {}
-impl SessionState for Connected {}
-impl SessionState for Disconnected {}
+    pub trait SessionState {}
+    impl SessionState for Start {}
+    impl SessionState for Login {}
+    impl SessionState for Connected {}
+    impl SessionState for Disconnected {}
+}
 
 
 #[derive(Error, Debug)]
