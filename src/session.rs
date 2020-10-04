@@ -9,6 +9,7 @@ use tokio_tungstenite::{
         Error as TungsteniteError,
     },
 };
+pub use tokio_tungstenite::tungstenite::protocol::Message;
 use tracing;
 use tracing_futures;
 use url::Url;
@@ -110,7 +111,7 @@ impl Session<state::Login> {
         -> Result<Session<state::Connected>>
     {
         let ws_url = self.get_websockets_uri().await?;
-        let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await.map_err(|e| SessionError::WebSockets(e))?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await.map_err(SessionError::WebSockets)?;
         Ok(Session {
             state: state::Connected {
                 credentials: self.state,
@@ -143,6 +144,13 @@ impl Session<state::Login> {
 }
 
 impl Session<state::Connected> {
+    #[tracing::instrument]
+    pub fn stream(&mut self)
+        -> &mut WebSocketStream
+    {
+        &mut self.state.websocket
+    }
+
     #[tracing::instrument]
     pub async fn close(mut self)
         -> Result<Session<state::Login>>
@@ -234,6 +242,9 @@ pub enum SessionError {
 
     #[error(transparent)]
     WebSockets(#[from] TungsteniteError),
+
+    #[error("Failed to forward received WebSocket message")]
+    PipeError,
 
     #[error("Login failed: {0}")]
     InvalidCredentials(String),
