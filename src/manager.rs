@@ -1,12 +1,18 @@
+use crossbeam::atomic::AtomicCell;
 use futures::prelude::*;
-use tokio::sync::Mutex;
-use tokio::sync::Notify;
+use tokio::sync::{
+    mpsc,
+    Mutex,
+    Notify,
+    RwLock,
+};
+use tracing::debug;
 
 use crate::Session;
 use crate::session::Message;
 use crate::session::Result as SessionResult;
 use crate::session::SessionError;
-use crate::session::state;
+use crate::session::state::{self, LoggedIn};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,13 +21,13 @@ use std::time::Duration;
 // Taken from setTimeout(1500000, ...) in Symphony JavaScript
 const SESSION_TIMEOUT: Duration = Duration::from_millis(1500000);
 
-type ManagedSession = Arc<Mutex<Option<Session<state::Connected>>>>;
+type ManagedSession = Arc<RwLock<Option<Session<state::Connected>>>>;
 
 pub struct SessionManager {
     session: ManagedSession,
     username: String,
     password: String,
-    shutdown_handle: Option<future::AbortHandle>,
+    shutdown_handle: AtomicCell<Option<future::AbortHandle>>,
     closing_semaphore: Arc<Notify>,
 }
 
@@ -40,70 +46,85 @@ impl SessionManager {
         -> SessionManager
     {
         SessionManager {
-            session: Arc::new(Mutex::new(None)),
+            session: Arc::new(RwLock::new(None)),
             username: username.to_string(),
             password: password.to_string(),
-            shutdown_handle: None,
+            shutdown_handle: AtomicCell::new(None),
             closing_semaphore: Arc::new(Notify::new()),
         }
     }
 
-    pub async fn login(&mut self)
+    pub async fn login(&self)
         -> SessionResult<()>
     {
+        let mut session_lock = self.session.write().await;
+
         // Idempotent no-op if already logged in
-        match self.session.try_lock() {
-            Ok(s) if s.is_some() => return Ok(()),
-            Err(_) => return Ok(()),
-            Ok(_) => {},
+        if let Some(_) = *session_lock {
+            return Ok(());
         }
 
-        let mut session_lock = self.session.clone().lock_owned().await;
         let connected_session =
             Session::new()
             .login(&self.username, &self.password).await?
             .connect().await?;
         *session_lock = Some(connected_session);
 
-        self.shutdown_handle = Some(self.spawn_renew_task(SESSION_TIMEOUT));
+        self.shutdown_handle.store(Some(self.spawn_renew_task(SESSION_TIMEOUT)));
 
         Ok(())
     }
 
-    pub async fn stream<T,R>(&self, mut tx: T, mut rx: R)
-        where T: Stream<Item = String> + std::marker::Unpin, R: Sink<String> + std::marker::Unpin
+    pub async fn stream(&self, mut tx: mpsc::UnboundedReceiver<String>, rx: mpsc::UnboundedSender<String>) -> SessionResult<()>
     {
-        let mut session_lock = self.session.clone().lock_owned().await;
-        match &mut *session_lock {
+        let session_lock = self.session.read().await;
+
+        match &*session_lock {
             Some(session) => {
-                let (mut ws_tx, mut ws_rx) = session.stream().split();
+                let mut stream = session.stream()?;
                 let closing_semaphore = self.closing_semaphore.clone();
                 loop {
-                    tokio::select! {
-                        Some(msg) = ws_rx.next() => rx.start_send_unpin(msg.unwrap().into_text().unwrap()).map_err(|_| SessionError::PipeError), // TODO: remove unwrap
-                        Some(s)   =    tx.next() => ws_tx.start_send_unpin(s.into()).map_err(SessionError::WebSockets),
+                    {tokio::select! {
+                        Some(msg) = stream.next() => {
+                            debug!("Received message: {:?}", msg);
+                            rx.send(msg.unwrap().into_text().unwrap()).map_err(|_| SessionError::Pipe) // TODO: remove unwrap
+                        },
+                        Some(s)   =    tx.next() => {
+                            debug!("Sending message: {:?}", s);
+                            stream.start_send_unpin(s.into()).map_err(SessionError::WebSockets)
+                        },
                         _ = closing_semaphore.notified() => break,
-                    };
+                    }}?;
                 }
             },
             None => {},
         }
+        Ok(())
+    }
+
+    pub fn close(&self)
+        -> SessionResult<()>
+    {
+        self.closing_semaphore.notify();
+
+        if let Some(h) = self.shutdown_handle.take() {
+            h.abort();
+        }
+
+        Ok(())
     }
 
     pub async fn logout(&self)
         -> SessionResult<()>
     {
-        self.closing_semaphore.notify();
+        let mut session_lock = self.session.write().await;
+
         // Idempotent no-op if already logged out
-        if self.session.lock().await.is_none() {
+        if let None = *session_lock {
             return Ok(())
         }
 
-        if let Some(ref h) = self.shutdown_handle {
-            h.abort();
-        }
-        let mut session_lock = self.session.clone().lock_owned().await;
-        let connected_session = session_lock.take().unwrap();
+        let connected_session = (*session_lock).take().unwrap();
         connected_session.logout().await?;
 
         Ok(())
@@ -115,6 +136,7 @@ impl SessionManager {
         let session_handle = Arc::clone(&self.session);
         let username = self.username.clone();
         let password = self.password.clone();
+        let closing_semaphore = self.closing_semaphore.clone();
 
         // Allowed here to remove warning about unreachable
         // Ok(...) at end of async block
@@ -126,10 +148,12 @@ impl SessionManager {
             let username = username;
             let password = password;
             let session_handle = session_handle;
+            let closing_semaphore = closing_semaphore;
             loop {
                 tokio::time::delay_for(duration).await;
-                let mut session_lock = session_handle.clone().lock_owned().await;
-                let connected_session = session_lock.take().unwrap();
+                closing_semaphore.notify();
+                let mut session_lock = session_handle.write().await;
+                let connected_session = (*session_lock).take().unwrap();
                 connected_session.logout().await?;
                 let connected_session =
                     Session::new()
@@ -144,13 +168,21 @@ impl SessionManager {
         tokio::spawn(timeout_fut);
         shutdown_handle
     }
+
+    pub async fn get_token(&self) -> SessionResult<String> {
+        let session_lock = self.session.read().await;
+        match &*session_lock {
+            Some(session) => Ok(session.get_token().to_string()),
+            None => Err(SessionError::InvalidCredentials("No session token".to_string())), // TODO: better error
+        }
+    }
 }
 
 impl Drop for SessionManager {
     fn drop(&mut self) {
         // Make sure to not leave Session renewing forever,
         // owned by the renew task's Arc
-        if let Some(ref h) = self.shutdown_handle {
+        if let Some(h) = self.shutdown_handle.take() { // TODO: handle error
             h.abort();
         }
     }

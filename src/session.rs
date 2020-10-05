@@ -10,10 +10,12 @@ use tokio_tungstenite::{
     },
 };
 pub use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio::sync::{Mutex, OwnedMutexGuard, TryLockError};
 use tracing;
 use tracing_futures;
 use url::Url;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 type WebSocketStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -115,7 +117,7 @@ impl Session<state::Login> {
         Ok(Session {
             state: state::Connected {
                 credentials: self.state,
-                websocket: ws_stream,
+                websocket: Arc::new(Mutex::new(ws_stream)),
             },
             client: self.client,
         })
@@ -143,19 +145,27 @@ impl Session<state::Login> {
     }
 }
 
+impl state::LoggedIn for Session<state::Login> {
+    fn get_token(&self) -> &str {
+        &self.state.session_id
+    }
+}
+
 impl Session<state::Connected> {
     #[tracing::instrument]
-    pub fn stream(&mut self)
-        -> &mut WebSocketStream
+    pub fn stream(&self)
+        -> Result<OwnedMutexGuard<WebSocketStream>>
     {
-        &mut self.state.websocket
+        let websocket_lock = self.state.websocket.clone().try_lock_owned()?;
+        Ok(websocket_lock)
     }
 
     #[tracing::instrument]
     pub async fn close(mut self)
         -> Result<Session<state::Login>>
     {
-        self.state.websocket.close(None).await?;
+        let mut websocket_lock = self.state.websocket.try_lock()?;
+        websocket_lock.close(None).await?;
 
         Ok(Session {
             state: self.state.credentials,
@@ -177,6 +187,12 @@ impl Session<state::Connected> {
             },
             client: start_session.client,
         })
+    }
+}
+
+impl state::LoggedIn for Session<state::Connected> {
+    fn get_token(&self) -> &str {
+        &self.state.credentials.session_id
     }
 }
 
@@ -212,7 +228,7 @@ pub mod state {
     }
     pub struct Connected { // "Running" state: logged in and websocket connected
         pub(super) credentials: Login,
-        pub(super) websocket: super::WebSocketStream,
+        pub(super) websocket: super::Arc<super::Mutex<super::WebSocketStream>>,
     }
     impl std::fmt::Debug for Connected {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -232,6 +248,10 @@ pub mod state {
     impl SessionState for Login {}
     impl SessionState for Connected {}
     impl SessionState for Disconnected {}
+
+    pub trait LoggedIn {
+        fn get_token(&self) -> &str;
+    }
 }
 
 
@@ -244,7 +264,10 @@ pub enum SessionError {
     WebSockets(#[from] TungsteniteError),
 
     #[error("Failed to forward received WebSocket message")]
-    PipeError,
+    Pipe,
+
+    #[error("stream() already called")]
+    AlreadyStreaming(#[from] TryLockError),
 
     #[error("Login failed: {0}")]
     InvalidCredentials(String),
