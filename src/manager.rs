@@ -87,7 +87,10 @@ impl SessionManager {
                     {tokio::select! {
                         Some(msg) = stream.next() => {
                             debug!("Received message: {:?}", msg);
-                            rx.send(msg.unwrap().into_text().unwrap()).map_err(|_| SessionError::Pipe) // TODO: remove unwrap
+                            match msg.unwrap() {
+                                Message::Text(s) => rx.send(s).map_err(|_| SessionError::Pipe), // TODO: remove unwrap
+                                _ => continue,
+                            }
                         },
                         Some(s)   =    tx.next() => {
                             debug!("Sending message: {:?}", s);

@@ -161,7 +161,7 @@ impl Session<state::Connected> {
     }
 
     #[tracing::instrument]
-    pub async fn close(mut self)
+    pub async fn close(self)
         -> Result<Session<state::Login>>
     {
         let mut websocket_lock = self.state.websocket.try_lock()?;

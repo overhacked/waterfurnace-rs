@@ -1,14 +1,15 @@
 use serde::{Serialize, Deserialize};
 use serde_json::{self, Value};
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tracing;
 use tracing_futures;
-use tracing::{trace, warn};
+use tracing::{trace, debug, warn, error};
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::vec::Vec;
 
 use crate::SessionManager;
 use crate::session::{SessionError, Result as SessionResult};
@@ -42,10 +43,95 @@ struct Request {
 pub struct Response {
     #[serde(rename = "tid")]
     transaction_id: u8,
-    #[serde(rename = "err", default)]
+    #[serde(rename = "err", default, deserialize_with="non_empty_str")]
     error: Option<String>,
+    success: bool,
     #[serde(flatten)]
-    data: HashMap<String, Value>,
+    data: ResponseType, // HashMap<String, Value>,
+    /*
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+    */
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "rsp", rename_all = "lowercase")]
+enum ResponseType {
+    Login {
+        #[serde(rename = "firstname")]
+        first_name: String,
+        #[serde(rename = "lastname")]
+        last_name: String,
+        #[serde(rename = "emailaddress")]
+        email: String,
+        key: u64,
+        locations: Vec<ResponseLoginLocations>,
+    },
+    Read {
+        #[serde(rename = "awlid")]
+        awl_id: String,
+        #[serde(flatten)]
+        metrics: HashMap<String, Value>,
+    },
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ResponseLoginLocations {
+    description: String,
+    postal: String,
+    city: String,
+    state: String,
+    country: String,
+    latitude: f64,
+    longitude: f64,
+    gateways: Vec<ResponseLoginGateway>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ResponseLoginGateway {
+    #[serde(rename = "gwid")]
+    awl_id: String,
+    description: String,
+    #[serde(rename = "type")]
+    gateway_type: ResponseGatewayType,
+    online: u8,
+    #[serde(rename = "iz2_max_zones")]
+    max_zones: u8,
+    #[serde(rename = "tstat_names", deserialize_with="zone_name_list")]
+    zone_names: HashMap<u8, String>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+#[derive(Deserialize, Debug)]
+pub enum ResponseGatewayType {
+    AWL,
+    #[serde(other)]
+    Other,
+}
+
+fn non_empty_str<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    use serde::Deserialize;
+    let o: Option<String> = Option::deserialize(d)?;
+    Ok(o.filter(|s| !s.is_empty()))
+}
+
+fn zone_name_list<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<HashMap<u8, String>, D::Error> {
+    use serde::{Deserialize, de::Error};
+    let m: serde_json::Map<String, Value> = Deserialize::deserialize(d)?;
+    let mut out = HashMap::<u8, String>::new();
+    for (key, value) in m.iter() {
+        let index = match key.strip_prefix("z") {
+            None => continue,
+            Some(k) => k.parse().or(Err(D::Error::custom("Invalid index")))?,
+        };
+        if let serde_json::Value::String(s) = value {
+            out.insert(index, s.into());
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug)]
@@ -57,6 +143,7 @@ struct TransactionList {
 #[derive(Debug)]
 pub struct Client {
     session: SessionManager,
+    ready: Notify,
     socket: Mutex<Option<mpsc::UnboundedSender<String>>>,
     transactions: Arc<Mutex<TransactionList>>,
 }
@@ -67,6 +154,7 @@ impl Client {
     {
         Client {
             session: SessionManager::new(&username, &password),
+            ready: Notify::new(),
             socket: Mutex::new(None),
             transactions: Arc::new(Mutex::new(TransactionList {
                 last: u8::MAX,
@@ -111,10 +199,24 @@ impl Client {
         // TODO: implement retry logic
         let result = tokio::try_join!(
             self.session.stream(tx_session, rx_session),
-            async move {
-                while let Some(message) = rx.recv().await {
+            async { Ok(self.ready.notify()) },
+            async {
+                while let Some(json) = rx.recv().await {
                     // TODO: implement receive logic
-                    trace!(%message);
+                    trace!(%json);
+                    match serde_json::from_str::<Response>(&json) {
+                        Ok(response) => {
+                            let mut transactions = self.transactions.lock().await;
+                            match transactions.list.remove(&response.transaction_id) {
+                                Some(receiver) => {
+                                    debug!(?response);
+                                    receiver.send(Ok(response));
+                                }, // TODO: implement Err for {"err":"*"}
+                                None => warn!(response.transaction_id, json = %json, "received response for invalid transaction"),
+                            }
+                        },
+                        Err(e) => error!(json = %json, error = %e, "failed to deserialize response"),
+                    }
                 }
                 warn!("End of message queue");
                 Err::<(), SessionError>(SessionError::Pipe)
@@ -127,13 +229,19 @@ impl Client {
     }
 
     #[tracing::instrument]
+    pub async fn ready(&self) {
+        self.ready.notified().await
+    }
+
+    #[tracing::instrument]
     pub async fn login(&self)
         -> Result<()>
     {
         let session_id = self.session.get_token().await?;
-        let _receiver = self.send(Command::Login { // TODO: do something with receiver
+        let receiver = self.send(Command::Login { // TODO: do something with receiver
             session_id: session_id,
-        }).await;
+        }).await?;
+        receiver.await;
         Ok(())
     }
 
@@ -157,6 +265,7 @@ impl Client {
         
         let mut transactions = self.transactions.lock().await;
         transactions.list.insert(request.transaction_id, sender);
+        trace!("Transaction {} inserted", request.transaction_id);
 
         Ok(receiver)
     }
