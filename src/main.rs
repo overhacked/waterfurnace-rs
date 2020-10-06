@@ -35,14 +35,9 @@ async fn main() -> Result<()> {
 
     client.ready().await;
     client.login().await?;
-    /*
-    let data = client.send(wf::Command::Read { // TODO: implement rlist (including max_zone population)
-        awl_id: "001EC02B2D8E".to_string(),
-        zone: 0,
-    }).await?;
 
-    println!("{:#?}", data.await?);
-    */
+    let data = client.gateway_read("001EC02B2D8E").await?;
+    println!("{:#?}", data);
 
 
     let run_time = std::time::Duration::from_secs(10);

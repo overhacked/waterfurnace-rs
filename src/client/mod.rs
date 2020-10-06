@@ -2,7 +2,7 @@ pub mod protocol;
 
 use serde_json;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tracing;
 use tracing_futures;
 use tracing::{trace, debug, warn, error};
@@ -30,6 +30,7 @@ pub struct Client {
     ready: Notify,
     socket: Mutex<Option<mpsc::UnboundedSender<String>>>,
     transactions: Arc<Mutex<TransactionList>>,
+    gateways: RwLock<HashMap<String, protocol::ResponseLoginGateway>>,
 }
 
 impl Client {
@@ -44,6 +45,7 @@ impl Client {
                 last: u8::MAX,
                 list: HashMap::new(),
             })),
+            gateways: RwLock::new(HashMap::new()),
         }
     }
 
@@ -125,7 +127,53 @@ impl Client {
         let receiver = self.send(Command::Login { // TODO: do something with receiver
             session_id: session_id,
         }).await?;
-        receiver.await.or(Err(ClientError::CommandFailed("login".to_string())))?
+        let login_result = receiver.await.or(Err(ClientError::CommandFailed("login".to_string())))?;
+        let login_response = login_result?;
+        let mut gateways_lock = self.gateways.write().await;
+        gateways_lock.clear();
+        if let protocol::ResponseType::Login{ ref locations, .. } = login_response.data() {
+            for location in locations {
+                for gateway in &location.gateways {
+                    gateways_lock.insert(gateway.awl_id.clone(), gateway.clone());
+                }
+            }
+        }
+        Ok(login_response)
+    }
+
+    #[tracing::instrument]
+    pub async fn gateway_read(&self, awl_id: &str)
+        -> Result<Response>
+    {
+        let gateways_lock = self.gateways.read().await;
+        let gateway = gateways_lock.get(awl_id).ok_or(ClientError::UnknownGateway(awl_id.to_string()))?;
+        let max_zones = gateway.max_zones;
+        drop(gateways_lock);
+
+        let zone_metrics_count = (max_zones as usize) * protocol::DEFAULT_ZONE_RLIST_SUFFIXES.len();
+        let gateway_metrics_count = protocol::DEFAULT_READ_RLIST.len();
+        let mut gateway_metrics = Vec::with_capacity(gateway_metrics_count + zone_metrics_count);
+
+        for metric in protocol::DEFAULT_READ_RLIST.iter() {
+            gateway_metrics.push(metric.to_string());
+        }
+
+        for zone_id in 1..max_zones {
+            for suffix in protocol::DEFAULT_ZONE_RLIST_SUFFIXES.iter() {
+                let zone_metric = format!("{}{}{}", protocol::ZONE_RLIST_PREFIX, zone_id, suffix);
+                gateway_metrics.push(zone_metric);
+            }
+        }
+
+        let request = Command::Read {
+            awl_id: awl_id.to_string(),
+            zone: 0,
+            rlist: gateway_metrics,
+        };
+
+        let receiver = self.send(request).await?;
+        let read_result = receiver.await.or(Err(ClientError::CommandFailed("read".to_string())))?;
+        Ok(read_result?)
     }
 
     #[tracing::instrument]
@@ -169,4 +217,7 @@ pub enum ClientError {
 
     #[error("Could not send command")]
     SendError(#[from] mpsc::error::SendError<String>),
+
+    #[error("Unknown gateway ID: {0}")]
+    UnknownGateway(String),
 }

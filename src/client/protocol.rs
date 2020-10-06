@@ -6,6 +6,49 @@ use std::vec::Vec;
 
 pub(super) const COMMAND_SOURCE: &str = "consumer dashboard";
 
+pub(super) const DEFAULT_READ_RLIST: [&str; 34] = [
+    "ActualCompressorSpeed",
+    "AirflowCurrentSpeed",
+    "AOCEnteringWaterTemp",
+    "AuroraOutputCC",
+    "AuroraOutputCC2",
+    "AuroraOutputEH1",
+    "AuroraOutputEH2",
+    "auroraoutputrv",
+    "auxpower",
+    "AWLABCType",
+    "AWLTStatType",
+    "compressorpower",
+    "dehumid_humid_sp",
+    "EnteringWaterTemp",
+    "fanpower",
+    "homeautomationalarm1",
+    "homeautomationalarm2",
+    "humidity_offset_settings",
+    "iz2_dehumid_humid_sp",
+    "iz2_humidity_offset_settings",
+    "lastfault",
+    "lastlockout",
+    "LeavingAirTemp",
+    "lockoutstatus",
+    "looppumppower",
+    "ModeOfOperation",
+    "totalunitpower",
+    "TStatActiveSetpoint",
+    "TStatCoolingSetpoint",
+    "TStatDehumidSetpoint",
+    "TStatHeatingSetpoint",
+    "TStatMode",
+    "TStatRelativeHumidity",
+    "TStatRoomTemp",
+];
+
+pub(super) const ZONE_RLIST_PREFIX: &str = "iz2_z";
+pub(super) const DEFAULT_ZONE_RLIST_SUFFIXES: [&str; 2] = [
+    "_roomtemp",
+    "_activesettings",
+];
+
 #[derive(Serialize, Debug)]
 #[serde(tag = "cmd", rename_all = "lowercase")]
 pub enum Command {
@@ -17,6 +60,7 @@ pub enum Command {
         #[serde(rename = "awlid")]
         awl_id: String,
         zone: u8,
+        rlist: Vec<String>,
     },
 }
 
@@ -35,7 +79,6 @@ pub struct Response {
     pub(super) transaction_id: u8,
     #[serde(rename = "err", default, deserialize_with="non_empty_str")]
     pub(super) error: Option<String>,
-    pub(super) success: bool,
     #[serde(flatten)]
     pub(super) data: ResponseType, // HashMap<String, Value>,
     #[serde(flatten)]
@@ -44,11 +87,11 @@ pub struct Response {
 
 impl Response {
     pub fn is_ok(&self) -> bool {
-        self.success
+        self.error.is_none()
     }
 
     pub fn is_err(&self) -> bool {
-        !self.success
+        !self.error.is_none()
     }
 
     pub fn error(&self) -> Option<String> {
@@ -68,6 +111,7 @@ impl Response {
 #[serde(tag = "rsp", rename_all = "lowercase")]
 pub enum ResponseType {
     Login {
+        success: bool,
         #[serde(rename = "firstname")]
         first_name: String,
         #[serde(rename = "lastname")]
@@ -85,37 +129,37 @@ pub enum ResponseType {
     },
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct ResponseLoginLocations {
-    description: String,
-    postal: String,
-    city: String,
-    state: String,
-    country: String,
-    latitude: f64,
-    longitude: f64,
-    gateways: Vec<ResponseLoginGateway>,
+    pub description: String,
+    pub postal: String,
+    pub city: String,
+    pub state: String,
+    pub country: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub gateways: Vec<ResponseLoginGateway>,
     #[serde(flatten)]
-    extra: HashMap<String, Value>,
+    pub extra: HashMap<String, Value>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct ResponseLoginGateway {
     #[serde(rename = "gwid")]
-    awl_id: String,
-    description: String,
+    pub awl_id: String,
+    pub description: String,
     #[serde(rename = "type")]
-    gateway_type: ResponseGatewayType,
-    online: u8,
+    pub gateway_type: ResponseGatewayType,
+    pub online: u8,
     #[serde(rename = "iz2_max_zones")]
-    max_zones: u8,
+    pub max_zones: u8,
     #[serde(rename = "tstat_names", deserialize_with="zone_name_list")]
-    zone_names: HashMap<u8, String>,
+    pub zone_names: HashMap<u8, String>,
     #[serde(flatten)]
-    extra: HashMap<String, Value>,
+    pub extra: HashMap<String, Value>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub enum ResponseGatewayType {
     AWL,
     #[serde(other)]
