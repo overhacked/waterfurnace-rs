@@ -1,7 +1,5 @@
 use eyre::Result;
 use structopt::StructOpt;
-use tokio::sync::Notify;
-use tracing::info;
 use tracing_subscriber;
 
 use waterfurnace_symphony as wf;

@@ -2,7 +2,6 @@ use crossbeam::atomic::AtomicCell;
 use futures::prelude::*;
 use tokio::sync::{
     mpsc,
-    Mutex,
     Notify,
     RwLock,
 };
