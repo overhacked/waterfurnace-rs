@@ -94,7 +94,7 @@ impl Client {
                             match transactions.list.remove(&response.transaction_id) {
                                 Some(receiver) => {
                                     debug!(?response);
-                                    receiver.send(Ok(response));
+                                    receiver.send(Ok(response)).or(Err(SessionError::Pipe))?;
                                 }, // TODO: implement Err for {"err":"*"}
                                 None => warn!(response.transaction_id, json = %json, "received response for invalid transaction"),
                             }
@@ -119,14 +119,13 @@ impl Client {
 
     #[tracing::instrument]
     pub async fn login(&self)
-        -> Result<()>
+        -> Result<Response>
     {
         let session_id = self.session.get_token().await?;
         let receiver = self.send(Command::Login { // TODO: do something with receiver
             session_id: session_id,
         }).await?;
-        receiver.await;
-        Ok(())
+        receiver.await.or(Err(ClientError::CommandFailed("login".to_string())))?
     }
 
     #[tracing::instrument]

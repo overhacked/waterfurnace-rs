@@ -34,14 +34,34 @@ pub struct Response {
     #[serde(rename = "tid")]
     pub(super) transaction_id: u8,
     #[serde(rename = "err", default, deserialize_with="non_empty_str")]
-    pub error: Option<String>,
-    pub success: bool,
+    pub(super) error: Option<String>,
+    pub(super) success: bool,
     #[serde(flatten)]
-    pub data: ResponseType, // HashMap<String, Value>,
-    /*
+    pub(super) data: ResponseType, // HashMap<String, Value>,
     #[serde(flatten)]
-    extra: HashMap<String, Value>,
-    */
+    pub(super) extra: HashMap<String, Value>,
+}
+
+impl Response {
+    pub fn is_ok(&self) -> bool {
+        self.success
+    }
+
+    pub fn is_err(&self) -> bool {
+        !self.success
+    }
+
+    pub fn error(&self) -> Option<String> {
+        self.error.clone()
+    }
+
+    pub fn data(&self) -> &ResponseType {
+        &self.data
+    }
+
+    pub fn extra(&self) -> &HashMap<String, Value> {
+        &self.extra
+    }
 }
 
 #[derive(Deserialize, Debug)]
