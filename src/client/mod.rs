@@ -96,23 +96,7 @@ impl Client {
                 while let Some(json) = rx.recv().await {
                     trace!(%json);
                     match serde_json::from_str::<Response>(&json) {
-                        Ok(response) => {
-                            let mut transactions = self.transactions.lock().await;
-                            match transactions.list.remove(&response.transaction_id) {
-                                Some(receiver) => {
-                                    debug!(?response);
-                                    let send_result = receiver.send(Ok(response));
-                                    if let Err(r) = &send_result {
-                                        warn!(
-                                            transaction_id = r.as_ref().unwrap().transaction_id,
-                                            json = %json,
-                                            "transaction was not awaited"
-                                        );
-                                    }
-                                }, // TODO: implement Err for {"err":"*"}
-                                None => warn!(response.transaction_id, json = %json, "received response for invalid transaction"),
-                            }
-                        },
+                        Ok(response) => self.commit_transaction(response).await,
                         Err(e) => error!(json = %json, error = %e, "failed to deserialize response"),
                     }
                 }
@@ -121,7 +105,47 @@ impl Client {
             },
         )?;
 
+        // Drop the transmit socket if we return
+        *(self.socket.lock().await) = None;
+
+        // Reset all transactions if the connection is lost
+        self.reset_transactions().await;
+
         Ok(())
+    }
+
+    #[tracing::instrument]
+    async fn commit_transaction(&self, response: Response) {
+        let mut transactions_lock = self.transactions.lock().await;
+        let transaction = transactions_lock.list.remove(&response.transaction_id);
+        drop(transactions_lock);
+
+        match transaction {
+            Some(receiver) => {
+                debug!(?response);
+                let send_result = receiver.send(
+                    match response.error {
+                        Some(ref msg) => Err(ClientError::ResponseError(msg.to_string(), response)),
+                        None    => Ok(response),
+                    }
+                );
+                if let Err(response) = &send_result {
+                    warn!(
+                        transaction_id = response.as_ref().unwrap().transaction_id,
+                        response = ?response,
+                        "transaction was not awaited"
+                    );
+                }
+            },
+            None => warn!(response.transaction_id, response = ?response, "received response for invalid transaction"),
+        }
+    }
+
+    #[tracing::instrument]
+    async fn reset_transactions(&self) {
+        let transactions = &mut self.transactions.lock().await;
+        transactions.list.clear();
+        transactions.last = Tid::MAX; // Will wrap on first transaction
     }
 
     #[tracing::instrument]
@@ -225,6 +249,9 @@ pub enum ClientError {
 
     #[error("Command timed out after {0}")]
     CommandTimeout(#[from] Elapsed),
+
+    #[error("Response error: {0}")]
+    ResponseError(String, Response),
 
     #[error("Transaction failed: {0}")]
     TransactionFailed(Tid),
