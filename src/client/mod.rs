@@ -2,8 +2,9 @@ pub mod protocol;
 
 use serde_json;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::time::{timeout, Elapsed};
+use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tracing;
 use tracing_futures;
 use tracing::{trace, debug, warn, error};
@@ -17,8 +18,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::SessionManager;
-use crate::manager::ManagerError;
+use crate::Waiter;
+use crate::session::{
+    Message,
+    Session,
+    SessionError,
+    state,
+};
+
+// Taken from setTimeout(1500000, ...) in Symphony JavaScript
+const SESSION_TIMEOUT: Duration = Duration::from_millis(1500000);
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -32,20 +41,18 @@ struct TransactionList {
 
 #[derive(Debug)]
 pub struct Client {
-    session: SessionManager,
-    ready: Notify,
+    ready: Waiter,
     socket: Mutex<Option<mpsc::UnboundedSender<String>>>,
     transactions: Arc<Mutex<TransactionList>>,
     gateways: RwLock<HashMap<String, protocol::ResponseLoginGateway>>,
 }
 
 impl Client {
-    pub fn new(username: String, password: String)
+    pub fn new()
         -> Client
     {
         Client {
-            session: SessionManager::new(&username, &password),
-            ready: Notify::new(),
+            ready: Waiter::new(false),
             socket: Mutex::new(None),
             transactions: Arc::new(Mutex::new(TransactionList {
                 last: Tid::MAX, // will wrap on first transaction
@@ -81,37 +88,66 @@ impl Client {
     }
 
     #[tracing::instrument]
-    pub async fn connect(&self)
+    pub async fn connect(&self, username: String, password: String)
         -> std::result::Result<(), DynError>
     {
-        self.session.login().await?;
-        let (tx, tx_session) = mpsc::unbounded_channel(); 
-        let (rx_session, mut rx) = mpsc::unbounded_channel(); 
-        *(self.socket.lock().await) = Some(tx);
+        use state::LoggedIn;
+
+        let mut session =
+            Session::new()
+            .login(&username, &password).await?
+            .connect().await?;
+        let (tx_client, mut tx_session) = mpsc::unbounded_channel();
+        *(self.socket.lock().await) = Some(tx_client);
+
         // TODO: implement retry logic
-        tokio::try_join!(
-            self.session.stream(tx_session, rx_session),
-            async { Ok(self.ready.notify()) },
-            async {
-                while let Some(json) = rx.recv().await {
-                    trace!(%json);
-                    match serde_json::from_str::<Response>(&json) {
-                        Ok(response) => self.commit_transaction(response).await,
-                        Err(e) => error!(json = %json, error = %e, "failed to deserialize response"),
+        loop {
+            let session_id = session.get_token().to_owned();
+            let join_result = tokio::try_join!(
+                self.handle_messages(session, &mut tx_session),
+                self.login(&session_id),
+            )?;
+            session = join_result.0;
+            let disconnected_session = session.logout().await?;
+            self.reset_transactions().await;
+            session = disconnected_session
+                .login().await?
+                .connect().await?;
+        }
+    }
+
+    async fn handle_messages(&self, session: Session<state::Connected>, tx_channel: &mut mpsc::UnboundedReceiver<String>)
+        -> Result<Session<state::Connected>>
+    {
+        loop {
+            tokio::select! {
+                Some(msg) = session.next() => {
+                    debug!("Received message: {:?}", msg);
+                    match msg? {
+                        Message::Text(json) => {
+                            trace!(%json);
+                            match serde_json::from_str::<Response>(&json) {
+                                Ok(response) => self.commit_transaction(response).await,
+                                Err(e) => error!(json = %json, error = %e, "failed to deserialize response"),
+                            }
+                        },
+                        _ => continue,
                     }
-                }
-                debug!("End of message queue");
-                Ok(())
-            },
-        )?;
+                },
+                Some(json) = tx_channel.recv() => {
+                    debug!("Sending message: {:?}", json);
+                    if let Err(e) = session.send_text(json).await {
+                        error!(error = %e, "failed to send message");
+                    }
+                },
+                _ = tokio::time::delay_for(SESSION_TIMEOUT) => {
+                    self.ready.set_unready();
+                    break;
+                },
+            };
+        }
 
-        // Drop the transmit socket if we return
-        *(self.socket.lock().await) = None;
-
-        // Reset all transactions if the connection is lost
-        self.reset_transactions().await;
-
-        Ok(())
+        Ok(session)
     }
 
     #[tracing::instrument]
@@ -150,16 +186,15 @@ impl Client {
 
     #[tracing::instrument]
     pub async fn ready(&self) {
-        self.ready.notified().await
+        self.ready.wait_ready().await
     }
 
     #[tracing::instrument]
-    pub async fn login(&self)
+    async fn login(&self, session_id: &str)
         -> Result<Response>
     {
-        let session_id = self.session.get_token().await?;
         let receiver = self.send(Command::Login {
-            session_id: session_id,
+            session_id: session_id.to_string(),
         }).await?;
         let login_result = timeout(COMMAND_TIMEOUT, receiver).await?
             .or(Err(ClientError::CommandFailed("login".to_string())))?;
@@ -173,6 +208,8 @@ impl Client {
                 }
             }
         }
+
+        self.ready.set_ready();
         Ok(login_response)
     }
 
@@ -180,6 +217,8 @@ impl Client {
     pub async fn gateway_read(&self, awl_id: &str)
         -> Result<Response>
     {
+        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await?;
+
         let gateways_lock = self.gateways.read().await;
         let gateway = gateways_lock.get(awl_id).ok_or(ClientError::UnknownGateway(awl_id.to_string()))?;
         let max_zones = gateway.max_zones;
@@ -229,7 +268,7 @@ impl Client {
         trace!(%json);
         socket.send(json)
             .map_err(ClientError::SendError)?;
-        
+
         let mut transactions = self.transactions.lock().await;
         transactions.list.insert(request.transaction_id, sender);
         trace!("Transaction {} inserted", request.transaction_id);
@@ -260,11 +299,14 @@ pub enum ClientError {
     TooManyTransactions,
 
     #[error(transparent)]
-    SessionError(#[from] ManagerError),
+    SessionError(#[from] SessionError),
 
     #[error("Could not send command")]
     SendError(#[from] mpsc::error::SendError<String>),
 
     #[error("Unknown gateway ID: {0}")]
     UnknownGateway(String),
+
+    #[error(transparent)]
+    WebSockets(#[from] TungsteniteError),
 }

@@ -1,9 +1,9 @@
 #![deny(missing_debug_implementations)]
 
 mod client;
-mod manager;
 mod session;
+mod ready_waiter;
 
 pub use session::Session;
-pub use manager::SessionManager;
 pub use client::{Client, Command};
+pub(crate) use ready_waiter::Waiter;

@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 use http::{HeaderMap, HeaderValue, header::{COOKIE}};
 use regex::Regex;
 use reqwest;
@@ -7,15 +9,15 @@ use tokio_tungstenite::{
     self,
     tungstenite::{
         Error as TungsteniteError,
+        protocol::Message as TungsteniteMessage,
     },
 };
 pub use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio::sync::{
     Mutex,
-    OwnedMutexGuard,
     TryLockError,
 };
-use tracing;
+use tracing::{self, debug, info,};
 use tracing_futures;
 use url::Url;
 
@@ -109,7 +111,9 @@ impl Session<state::Login> {
         -> Result<Session<state::Connected>>
     {
         let ws_url = self.get_websockets_uri().await?;
+        info!("Connecting to {}", &ws_url);
         let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await?;
+        debug!("Connected!");
         Ok(Session {
             state: state::Connected {
                 credentials: self.state,
@@ -133,10 +137,13 @@ impl Session<state::Login> {
                     format!("Could not find wss://* URI in {}", AWLCONFIG_URI).to_string()
                 )
             ),
-            Some(m) => Url::parse(m.as_str())
-                .map_err(|e| SessionError::UnexpectedValue(
-                    format!("Could not parse URI ({:?}): {}", e, m.as_str()).to_string()
-                )),
+            Some(m) => {
+                debug!("Got WebSockets URI: {}", &m.as_str());
+                Url::parse(m.as_str())
+                    .map_err(|e| SessionError::UnexpectedValue(
+                        format!("Could not parse URI ({:?}): {}", e, m.as_str()).to_string()
+                    ))
+            },
         }
     }
 }
@@ -148,16 +155,38 @@ impl state::LoggedIn for Session<state::Login> {
 }
 
 impl Session<state::Connected> {
-    #[tracing::instrument]
-    pub fn stream(&self)
-        -> Result<OwnedMutexGuard<WebSocketStream>>
+    pub async fn next(&self)
+        -> Option<std::result::Result<TungsteniteMessage, TungsteniteError>>
     {
-        let websocket_lock = self.state.websocket.clone().try_lock_owned()?;
-        Ok(websocket_lock)
+        let websocket_c = self.state.websocket.clone();
+        let mut websocket_lock = websocket_c.lock().await;
+        websocket_lock.next().await
+    }
+
+    pub async fn send(&self, message: TungsteniteMessage)
+        -> Result<()>
+    {
+        let websocket_c = self.state.websocket.clone();
+        let mut websocket_lock = websocket_c.lock().await;
+        Ok(websocket_lock.send(message).await?)
+    }
+
+    pub async fn send_text<S>(&self, message: S)
+        -> Result<()>
+        where S: Into<String>,
+    {
+        self.send(Message::text(message)).await
+    }
+
+    pub async fn send_binary<B>(&self, message: B)
+        -> Result<()>
+        where B: Into<Vec<u8>>,
+    {
+        self.send(Message::binary(message)).await
     }
 
     #[tracing::instrument]
-    pub async fn close(self)
+    async fn close(self)
         -> Result<Session<state::Login>>
     {
         let mut websocket_lock = self.state.websocket.try_lock()?;
@@ -270,11 +299,3 @@ pub enum SessionError {
 }
 
 pub type Result<T> = std::result::Result<T, SessionError>;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}

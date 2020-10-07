@@ -23,22 +23,13 @@ async fn main() -> Result<()> {
 
     let opt = Opt::from_args();
 
-    let client = Arc::new(wf::Client::new(opt.username.clone(), opt.password.clone()));
+    let client = Arc::new(wf::Client::new());
 
     let client2 = Arc::clone(&client);
-    tokio::spawn(async move { client2.connect().await });
-
-    /*
-    let run_time = std::time::Duration::from_secs(2);
-    tokio::time::delay_for(run_time).await;
-    */
-
-    client.ready().await;
-    client.login().await?;
+    tokio::spawn(async move { client2.connect(opt.username.clone(), opt.password.clone()).await });
 
     let data = client.gateway_read("001EC02B2D8E").await?;
     println!("{:#?}", data);
-
 
     let run_time = std::time::Duration::from_secs(10);
     tokio::time::delay_for(run_time).await;
