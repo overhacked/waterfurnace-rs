@@ -10,7 +10,11 @@ use tokio_tungstenite::{
     },
 };
 pub use tokio_tungstenite::tungstenite::protocol::Message;
-use tokio::sync::{Mutex, OwnedMutexGuard, TryLockError};
+use tokio::sync::{
+    Mutex,
+    OwnedMutexGuard,
+    TryLockError,
+};
 use tracing;
 use tracing_futures;
 use url::Url;
@@ -22,6 +26,7 @@ type WebSocketStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::May
 
 const LOGIN_URI: &str = "https://symphony.mywaterfurnace.com/account/login";
 const AWLCONFIG_URI: &str = "https://symphony.mywaterfurnace.com/assets/js/awlconfig.js.php";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub struct Session<S: state::SessionState> {
@@ -67,23 +72,18 @@ impl Session<state::Start> {
             ])
             .send().await;
 
-        match login_result.and_then(|r| r.error_for_status()) {
-            Err(e) => Err(SessionError::Http(e)),
-            Ok(response) => {
-                let session_cookie = response.cookies().find(|c| c.name() == "sessionid");
-                match session_cookie {
-                    None => Err(SessionError::InvalidCredentials("Response did not contain `sessionid` cookie.".to_string())),
-                    Some(session_cookie) => Ok(Session {
-                        state: state::Login {
-                            username: username.to_string(),
-                            password: password.to_string(),
-                            session_id: session_cookie.value().to_string(),
-                        },
-                        client: self.client,
-                    })
-                }
-            }
-        }
+        let login_response = login_result.and_then(|r| r.error_for_status())?;
+        let session_cookie = login_response.cookies()
+            .find(|c| c.name() == "sessionid")
+            .ok_or(SessionError::InvalidCredentials)?;
+        Ok(Session {
+            state: state::Login {
+                username: username.to_string(),
+                password: password.to_string(),
+                session_id: session_cookie.value().to_string(),
+            },
+            client: self.client,
+        })
     }
 }
 
@@ -94,18 +94,14 @@ impl Session<state::Login> {
     {
         let mut logout_uri = reqwest::Url::parse(LOGIN_URI).unwrap();
         logout_uri.set_query(Some("op=logout"));
-        let logout_result = self.client.get(logout_uri)
-            .timeout(Duration::from_secs(2))
-            .send().await;
-        match logout_result.and_then(|r| r.error_for_status()) {
-            Err(e) => Err(SessionError::Http(e)),
-            Ok(_) => {
-                Ok(Session {
-                    state: state::Start {},
-                    client: self.client,
-                })
-            }
-        }
+        self.client.get(logout_uri)
+            .timeout(HTTP_TIMEOUT)
+            .send().await
+            .and_then(|r| r.error_for_status())?;
+        Ok(Session {
+            state: state::Start {},
+            client: self.client,
+        })
     }
 
     #[tracing::instrument]
@@ -113,7 +109,7 @@ impl Session<state::Login> {
         -> Result<Session<state::Connected>>
     {
         let ws_url = self.get_websockets_uri().await?;
-        let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await.map_err(SessionError::WebSockets)?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await?;
         Ok(Session {
             state: state::Connected {
                 credentials: self.state,
@@ -128,19 +124,19 @@ impl Session<state::Login> {
         let wssuri_result = self.client
             .get(AWLCONFIG_URI)
             .send().await;
-        match wssuri_result.and_then(|r| r.error_for_status()) {
-            Err(e) => Err(SessionError::Http(e)),
-            Ok(response) => {
-                let text = response.text().await?;
-                let re = Regex::new(r#"wss?://[^"']+"#).unwrap();
-                match re.find(&text) {
-                    None => Err(SessionError::UnexpectedValue(format!("Could not find wss://* URI in {}", AWLCONFIG_URI).to_string())),
-                    Some(m) => Url::parse(m.as_str())
-                        .map_err(|e| SessionError::UnexpectedValue(
-                            format!("Could not parse URI ({:?}): {}", e, m.as_str()).to_string()
-                        )),
-                }
-            }
+        let wssuri_response = wssuri_result.and_then(|r| r.error_for_status())?;
+        let text = wssuri_response.text().await?;
+        let re = Regex::new(r#"wss?://[^"']+"#).unwrap();
+        match re.find(&text) {
+            None => Err(
+                SessionError::UnexpectedValue(
+                    format!("Could not find wss://* URI in {}", AWLCONFIG_URI).to_string()
+                )
+            ),
+            Some(m) => Url::parse(m.as_str())
+                .map_err(|e| SessionError::UnexpectedValue(
+                    format!("Could not parse URI ({:?}): {}", e, m.as_str()).to_string()
+                )),
         }
     }
 }
@@ -263,14 +259,11 @@ pub enum SessionError {
     #[error(transparent)]
     WebSockets(#[from] TungsteniteError),
 
-    #[error("Failed to forward received WebSocket message")]
-    Pipe,
-
     #[error("stream() already called")]
     AlreadyStreaming(#[from] TryLockError),
 
-    #[error("Login failed: {0}")]
-    InvalidCredentials(String),
+    #[error("Invalid credentials, could not get session ID")]
+    InvalidCredentials,
 
     #[error("Unexpected value: {0}")]
     UnexpectedValue(String),

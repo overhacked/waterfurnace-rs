@@ -1,17 +1,26 @@
 use crossbeam::atomic::AtomicCell;
 use futures::prelude::*;
+use thiserror::Error;
 use tokio::sync::{
     mpsc,
     Notify,
     RwLock,
+    mpsc::error::SendError,
 };
+use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tracing::debug;
 
-use crate::Session;
-use crate::session::Message;
-use crate::session::Result as SessionResult;
-use crate::session::SessionError;
-use crate::session::state::{self, LoggedIn};
+use crate::{
+    Session,
+    session::{
+        Message,
+        SessionError,
+        state::{
+            self,
+            LoggedIn
+        },
+    },
+};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,7 +63,7 @@ impl SessionManager {
     }
 
     pub async fn login(&self)
-        -> SessionResult<()>
+        -> Result<()>
     {
         let mut session_lock = self.session.write().await;
 
@@ -74,7 +83,7 @@ impl SessionManager {
         Ok(())
     }
 
-    pub async fn stream(&self, mut tx: mpsc::UnboundedReceiver<String>, rx: mpsc::UnboundedSender<String>) -> SessionResult<()>
+    pub async fn stream(&self, mut tx: mpsc::UnboundedReceiver<String>, rx: mpsc::UnboundedSender<String>) -> Result<()>
     {
         let session_lock = self.session.read().await;
 
@@ -83,20 +92,20 @@ impl SessionManager {
                 let mut stream = session.stream()?;
                 let closing_semaphore = self.closing_semaphore.clone();
                 loop {
-                    {tokio::select! {
+                    tokio::select! {
                         Some(msg) = stream.next() => {
                             debug!("Received message: {:?}", msg);
-                            match msg.unwrap() {
-                                Message::Text(s) => rx.send(s).map_err(|_| SessionError::Pipe), // TODO: remove unwrap
+                            match msg? {
+                                Message::Text(s) => rx.send(s)?,
                                 _ => continue,
                             }
                         },
                         Some(s)   =    tx.next() => {
                             debug!("Sending message: {:?}", s);
-                            stream.start_send_unpin(s.into()).map_err(SessionError::WebSockets)
+                            stream.start_send_unpin(s.into())?
                         },
                         _ = closing_semaphore.notified() => break,
-                    }}?;
+                    };
                 }
             },
             None => {},
@@ -105,7 +114,7 @@ impl SessionManager {
     }
 
     pub fn close(&self)
-        -> SessionResult<()>
+        -> Result<()>
     {
         self.closing_semaphore.notify();
 
@@ -117,7 +126,7 @@ impl SessionManager {
     }
 
     pub async fn logout(&self)
-        -> SessionResult<()>
+        -> Result<()>
     {
         let mut session_lock = self.session.write().await;
 
@@ -165,18 +174,17 @@ impl SessionManager {
             }
             // Explicit return type required to use ? operator in async block
             // See https://rust-lang.github.io/async-book/07_workarounds/02_err_in_async_blocks.html
-            Ok::<(), SessionError>(())
+            Ok::<(), ManagerError>(())
         });
         tokio::spawn(timeout_fut);
         shutdown_handle
     }
 
-    pub async fn get_token(&self) -> SessionResult<String> {
+    pub async fn get_token(&self) -> Result<String> {
         let session_lock = self.session.read().await;
-        match &*session_lock {
-            Some(session) => Ok(session.get_token().to_string()),
-            None => Err(SessionError::InvalidCredentials("No session token".to_string())), // TODO: better error
-        }
+        let session = session_lock.as_ref().ok_or(ManagerError::NotConnected)?;
+        let token = session.get_token();
+        Ok(token.to_string())
     }
 }
 
@@ -184,8 +192,25 @@ impl Drop for SessionManager {
     fn drop(&mut self) {
         // Make sure to not leave Session renewing forever,
         // owned by the renew task's Arc
-        if let Some(h) = self.shutdown_handle.take() { // TODO: handle error
+        if let Some(h) = self.shutdown_handle.take() {
             h.abort();
         }
     }
 }
+
+#[derive(Error, Debug)]
+pub enum ManagerError {
+    #[error("Failed to forward received WebSocket message")]
+    Pipe(#[from] SendError<String>),
+
+    #[error(transparent)]
+    Session(#[from] SessionError),
+
+    #[error(transparent)]
+    WebSockets(#[from] TungsteniteError),
+
+    #[error("Session not connected")]
+    NotConnected,
+}
+
+pub type Result<T> = std::result::Result<T, ManagerError>;
