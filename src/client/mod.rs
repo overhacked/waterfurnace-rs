@@ -18,10 +18,12 @@ use std::sync::Arc;
 use crate::SessionManager;
 use crate::manager::ManagerError;
 
+type Tid = u8;
+
 #[derive(Debug)]
 struct TransactionList {
-    last: u8, // will wrap to 0 on first transaction
-    list: HashMap<u8, oneshot::Sender<Result<Response>>>,
+    last: Tid,
+    list: HashMap<Tid, oneshot::Sender<Result<Response>>>,
 }
 
 #[derive(Debug)]
@@ -42,17 +44,17 @@ impl Client {
             ready: Notify::new(),
             socket: Mutex::new(None),
             transactions: Arc::new(Mutex::new(TransactionList {
-                last: u8::MAX,
+                last: Tid::MAX, // will wrap on first transaction
                 list: HashMap::new(),
             })),
             gateways: RwLock::new(HashMap::new()),
         }
     }
 
-    async fn next_transaction_id(&self) -> Result<u8> {
+    async fn next_transaction_id(&self) -> Result<Tid> {
         let transactions = &mut self.transactions.lock().await;
         let first_candidate_tid =
-            if transactions.last < u8::MAX { transactions.last + 1 }
+            if transactions.last < Tid::MAX { transactions.last + 1 }
             else { 1 };
         let mut candidate_tid = first_candidate_tid;
         transactions.last = loop {
@@ -60,7 +62,7 @@ impl Client {
                 break candidate_tid;
             }
 
-            if candidate_tid < u8::MAX {
+            if candidate_tid < Tid::MAX {
                 candidate_tid += 1;
             } else {
                 candidate_tid = 1;
@@ -216,7 +218,7 @@ pub enum ClientError {
     CommandFailed(String),
 
     #[error("Transaction failed: {0}")]
-    TransactionFailed(u8),
+    TransactionFailed(Tid),
 
     #[error("Maximum 255 transactions in progress")]
     TooManyTransactions,
