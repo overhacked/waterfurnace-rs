@@ -3,6 +3,7 @@ pub mod protocol;
 use serde_json;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
+use tokio::time::{timeout, Elapsed};
 use tracing;
 use tracing_futures;
 use tracing::{trace, debug, warn, error};
@@ -14,9 +15,12 @@ pub use protocol::{
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::SessionManager;
 use crate::manager::ManagerError;
+
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 type Tid = u8;
 
@@ -133,7 +137,8 @@ impl Client {
         let receiver = self.send(Command::Login {
             session_id: session_id,
         }).await?;
-        let login_result = receiver.await.or(Err(ClientError::CommandFailed("login".to_string())))?;
+        let login_result = timeout(COMMAND_TIMEOUT, receiver).await?
+            .or(Err(ClientError::CommandFailed("login".to_string())))?;
         let login_response = login_result?;
         let mut gateways_lock = self.gateways.write().await;
         gateways_lock.clear();
@@ -178,7 +183,8 @@ impl Client {
         };
 
         let receiver = self.send(request).await?;
-        let read_result = receiver.await.or(Err(ClientError::CommandFailed("read".to_string())))?;
+        let read_result = timeout(COMMAND_TIMEOUT, receiver).await?
+            .or(Err(ClientError::CommandFailed("read".to_string())))?;
         Ok(read_result?)
     }
 
@@ -216,6 +222,9 @@ type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub enum ClientError {
     #[error("Command failed: {0}")]
     CommandFailed(String),
+
+    #[error("Command timed out after {0}")]
+    CommandTimeout(#[from] Elapsed),
 
     #[error("Transaction failed: {0}")]
     TransactionFailed(Tid),
