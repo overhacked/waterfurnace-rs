@@ -3,11 +3,11 @@ pub mod protocol;
 use serde_json;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
-use tokio::time::{timeout, Elapsed};
+use tokio::time::{timeout, Elapsed, Instant};
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tracing;
 use tracing_futures;
-use tracing::{trace, debug, warn, error};
+use tracing::{trace, debug, info, warn, error};
 
 pub use protocol::{
     Command,
@@ -29,7 +29,7 @@ use crate::session::{
 // Taken from setTimeout(1500000, ...) in Symphony JavaScript
 const SESSION_TIMEOUT: Duration = Duration::from_millis(1500000);
 
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 type Tid = u8;
 
@@ -108,17 +108,20 @@ impl Client {
                 self.login(&session_id),
             )?;
             session = join_result.0;
+            info!("Renewing session");
             let disconnected_session = session.logout().await?;
             self.reset_transactions().await;
             session = disconnected_session
                 .login().await?
                 .connect().await?;
+            info!("Session renewed");
         }
     }
 
     async fn handle_messages(&self, session: Session<state::Connected>, tx_channel: &mut mpsc::UnboundedReceiver<String>)
         -> Result<Session<state::Connected>>
     {
+        let timeout_at = Instant::now() + SESSION_TIMEOUT;
         loop {
             tokio::select! {
                 Some(msg) = session.next() => {
@@ -140,7 +143,8 @@ impl Client {
                         error!(error = %e, "failed to send message");
                     }
                 },
-                _ = tokio::time::delay_for(SESSION_TIMEOUT) => {
+                _ = tokio::time::delay_until(timeout_at) => {
+                    debug!("Session timeout");
                     self.ready.set_unready();
                     break;
                 },
@@ -182,6 +186,7 @@ impl Client {
         let transactions = &mut self.transactions.lock().await;
         transactions.list.clear();
         transactions.last = Tid::MAX; // Will wrap on first transaction
+        debug!("Transactions reset");
     }
 
     #[tracing::instrument]
@@ -210,6 +215,7 @@ impl Client {
         }
 
         self.ready.set_ready();
+        info!(gateways = ?*gateways_lock, "Successful login");
         Ok(login_response)
     }
 
