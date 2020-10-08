@@ -26,6 +26,8 @@ use crate::session::{
     state,
 };
 
+const LOGIN_URI: &str = "https://symphony.mywaterfurnace.com/account/login";
+const AWLCONFIG_URI: &str = "https://symphony.mywaterfurnace.com/assets/js/awlconfig.js.php";
 // Taken from setTimeout(1500000, ...) in Symphony JavaScript
 const SESSION_TIMEOUT: Duration = Duration::from_millis(1500000);
 
@@ -94,7 +96,7 @@ impl Client {
         use state::LoggedIn;
 
         let mut session =
-            Session::new()
+            Session::new(LOGIN_URI, AWLCONFIG_URI)
             .login(&username, &password).await?
             .connect().await?;
         let (tx_client, mut tx_session) = mpsc::unbounded_channel();

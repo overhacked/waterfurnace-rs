@@ -26,18 +26,18 @@ use std::time::Duration;
 
 type WebSocketStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-const LOGIN_URI: &str = "https://symphony.mywaterfurnace.com/account/login";
-const AWLCONFIG_URI: &str = "https://symphony.mywaterfurnace.com/assets/js/awlconfig.js.php";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub struct Session<S: state::SessionState> {
     state: S,
     client: reqwest::Client,
+    login_uri: String,
+    config_uri: String,
 }
 
 impl Session<state::Start> {
-    pub fn new() -> Self {
+    pub fn new(uri: &str, config_uri: &str) -> Self {
         let redirect_policy =
             reqwest::redirect::Policy::custom(|attempt| {
                 match attempt.previous().last() {
@@ -54,6 +54,8 @@ impl Session<state::Start> {
                 .redirect(redirect_policy)
                 .build().unwrap()
             },
+            login_uri: uri.to_string(),
+            config_uri: config_uri.to_string(),
         }
     }
 
@@ -64,7 +66,7 @@ impl Session<state::Start> {
         let mut login_headers = HeaderMap::new();
         login_headers.insert(COOKIE, HeaderValue::from_str("legal-acknowledge=yes").unwrap());
 
-        let login_result = self.client.post(LOGIN_URI)
+        let login_result = self.client.post(&self.login_uri)
             .headers(login_headers)
             .form(&[
                 ("op", "login"),
@@ -85,6 +87,8 @@ impl Session<state::Start> {
                 session_id: session_cookie.value().to_string(),
             },
             client: self.client,
+            login_uri: self.login_uri,
+            config_uri: self.config_uri,
         })
     }
 }
@@ -94,7 +98,7 @@ impl Session<state::Login> {
     pub async fn logout(self)
         -> Result<Session<state::Start>>
     {
-        let mut logout_uri = reqwest::Url::parse(LOGIN_URI).unwrap();
+        let mut logout_uri = reqwest::Url::parse(&self.login_uri).unwrap();
         logout_uri.set_query(Some("op=logout"));
         self.client.get(logout_uri)
             .timeout(HTTP_TIMEOUT)
@@ -103,6 +107,8 @@ impl Session<state::Login> {
         Ok(Session {
             state: state::Start {},
             client: self.client,
+            login_uri: self.login_uri,
+            config_uri: self.config_uri,
         })
     }
 
@@ -120,13 +126,15 @@ impl Session<state::Login> {
                 websocket: Arc::new(Mutex::new(ws_stream)),
             },
             client: self.client,
+            login_uri: self.login_uri,
+            config_uri: self.config_uri,
         })
     }
 
     #[tracing::instrument]
     async fn get_websockets_uri(&self) -> Result<Url> {
         let wssuri_result = self.client
-            .get(AWLCONFIG_URI)
+            .get(&self.config_uri)
             .send().await;
         let wssuri_response = wssuri_result.and_then(|r| r.error_for_status())?;
         let text = wssuri_response.text().await?;
@@ -134,7 +142,7 @@ impl Session<state::Login> {
         match re.find(&text) {
             None => Err(
                 SessionError::UnexpectedValue(
-                    format!("Could not find wss://* URI in {}", AWLCONFIG_URI).to_string()
+                    format!("Could not find wss://* URI in {}", self.config_uri).to_string()
                 )
             ),
             Some(m) => {
@@ -195,6 +203,8 @@ impl Session<state::Connected> {
         Ok(Session {
             state: self.state.credentials,
             client: self.client,
+            login_uri: self.login_uri,
+            config_uri: self.config_uri,
         })
     }
 
@@ -211,6 +221,8 @@ impl Session<state::Connected> {
                 credentials: credentials,
             },
             client: start_session.client,
+            login_uri: start_session.login_uri,
+            config_uri: start_session.config_uri,
         })
     }
 }
@@ -225,7 +237,7 @@ impl Session<state::Disconnected> {
     pub async fn login(self)
         -> Result<Session<state::Login>>
     {
-        Session::new().login(
+        Session::new(&self.login_uri, &self.config_uri).login(
             &self.state.credentials.username,
             &self.state.credentials.password
         ).await
