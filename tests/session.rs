@@ -56,7 +56,11 @@ async fn connect() {
     let server = server::http();
 
     match establish_connected_session(&server).await {
-        Ok(_) => { }, // Success 
+        Ok(session) => {
+            assert!(matches!(session.get_state(), state::Connected{..}));
+            let session = session.close().await.expect("session.close() failed");
+            assert!(matches!(session.get_state(), state::Login{..}));
+        },
         Err(e) => {
             println!("{}", e);
             panic!("session.connect() returned error");
@@ -76,4 +80,25 @@ async fn send() {
     let reply = session.next().await.expect("No reply, WebSocket hung up")
         .expect("WebSocket error");
     assert_eq!(reply.into_text().expect("Wasn't a Text frame"), "Hello".to_string());
+
+    session.close().await.expect("session.close() failed");
+}
+
+#[tokio::test]
+async fn log_out() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let server = server::http();
+
+    let login_result = establish_login_session(&server).await.expect("session.login() failed");
+
+    match login_result.logout().await {
+        Ok(r) => {
+            assert!(matches!(r.get_state(), state::Start{..}));
+        },
+        Err(e) => {
+            println!("{}", e);
+            panic!("session.login() returned error");
+        },
+    };
 }

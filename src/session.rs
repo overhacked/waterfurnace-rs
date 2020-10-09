@@ -36,6 +36,12 @@ pub struct Session<S: state::SessionState> {
     config_uri: String,
 }
 
+impl<S: state::SessionState> Session<S> {
+    pub fn get_state(&self) -> &S {
+        &self.state
+    }
+}
+
 impl Session<state::Start> {
     pub fn new(uri: &str, config_uri: &str) -> Self {
         let redirect_policy =
@@ -194,7 +200,7 @@ impl Session<state::Connected> {
     }
 
     #[tracing::instrument]
-    async fn close(self)
+    pub async fn close(self)
         -> Result<Session<state::Login>>
     {
         let mut websocket_lock = self.state.websocket.try_lock()?;
