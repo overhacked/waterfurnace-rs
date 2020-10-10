@@ -9,9 +9,11 @@ use tracing;
 use tracing_futures;
 use tracing::{trace, debug, info, warn, error};
 
-pub use protocol::{
-    Command,
+pub use protocol::Command;
+use protocol::{
     Response,
+    ReadResponse,
+    LoginResponse,
 };
 
 use std::collections::HashMap;
@@ -35,6 +37,7 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(30); // DEBUG
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 type Tid = u8;
+type GatewayList = HashMap<String, protocol::ResponseLoginGateway>;
 
 #[derive(Debug)]
 struct TransactionList {
@@ -45,23 +48,33 @@ struct TransactionList {
 #[derive(Debug)]
 pub struct Client {
     ready: Waiter,
+    shutdown: Waiter,
     socket: Mutex<Option<mpsc::UnboundedSender<String>>>,
     transactions: Arc<Mutex<TransactionList>>,
-    gateways: RwLock<HashMap<String, protocol::ResponseLoginGateway>>,
+    gateways: RwLock<GatewayList>,
+    awl_uri: String,
+    awl_config_uri: String,
 }
 
 impl Client {
-    pub fn new()
-        -> Client
+    pub fn new() -> Self {
+        Client::new_for(LOGIN_URI, AWLCONFIG_URI)
+    }
+
+    pub fn new_for(awl_login_uri: &str, awl_config_uri: &str)
+        -> Self
     {
         Client {
             ready: Waiter::new(false),
+            shutdown: Waiter::new(false),
             socket: Mutex::new(None),
             transactions: Arc::new(Mutex::new(TransactionList {
                 last: Tid::MAX, // will wrap on first transaction
                 list: HashMap::new(),
             })),
             gateways: RwLock::new(HashMap::new()),
+            awl_uri: awl_login_uri.to_string(),
+            awl_config_uri: awl_config_uri.to_string(),
         }
     }
 
@@ -97,7 +110,7 @@ impl Client {
         use state::LoggedIn;
 
         let mut session =
-            Session::new(LOGIN_URI, AWLCONFIG_URI)
+            Session::new(&self.awl_uri, &self.awl_config_uri)
             .login(&username, &password).await?
             .connect().await?;
         let (tx_client, mut tx_session) = mpsc::unbounded_channel();
@@ -109,8 +122,17 @@ impl Client {
             let join_result = tokio::try_join!(
                 self.handle_messages(session, &mut tx_session),
                 self.login(&session_id),
-            )?;
-            session = join_result.0;
+            );
+            session = match join_result {
+                Ok(j) => { j.0 },
+                Err(e) => {
+                    if let ClientError::ExpectedTermination = e {
+                        return Ok(());
+                    } else {
+                        return Err(e.into());
+                    }
+                }
+            };
             info!("Renewing session");
             let disconnected_session = session.logout().await?;
             self.reset_transactions().await;
@@ -127,17 +149,22 @@ impl Client {
         let timeout_at = Instant::now() + SESSION_TIMEOUT;
         loop {
             tokio::select! {
-                Some(msg) = session.next() => {
-                    debug!("Received message: {:?}", msg);
-                    match msg? {
-                        Message::Text(json) => {
-                            trace!(%json);
-                            match serde_json::from_str::<Response>(&json) {
-                                Ok(response) => self.commit_transaction(response).await,
-                                Err(e) => error!(json = %json, error = %e, "failed to deserialize response"),
+                next_result = session.next() => {
+                    match next_result {
+                        Some(msg) => {
+                            debug!("Received message: {:?}", msg);
+                            match msg? {
+                                Message::Text(json) => {
+                                    trace!(%json);
+                                    match serde_json::from_str::<Response>(&json) {
+                                        Ok(response) => self.commit_transaction(response).await,
+                                        Err(e) => error!(json = %json, error = %e, "failed to deserialize response"),
+                                    }
+                                },
+                                _ => continue,
                             }
                         },
-                        _ => continue,
+                        None => return Err(ClientError::ConnectionClosed),
                     }
                 },
                 Some(json) = tx_channel.recv() => {
@@ -151,6 +178,13 @@ impl Client {
                     self.ready.set_unready();
                     break;
                 },
+                _ = self.shutdown.wait_ready() => {
+                    debug!("Shutdown requested");
+                    self.ready.set_unready();
+                    session.logout().await?;
+                    self.reset_transactions().await;
+                    return Err(ClientError::ExpectedTermination);
+                },
             };
         }
 
@@ -160,27 +194,27 @@ impl Client {
     #[tracing::instrument]
     async fn commit_transaction(&self, response: Response) {
         let mut transactions_lock = self.transactions.lock().await;
-        let transaction = transactions_lock.list.remove(&response.transaction_id);
+        let transaction = transactions_lock.list.remove(&response.transaction_id());
         drop(transactions_lock);
 
         match transaction {
             Some(receiver) => {
                 debug!(?response);
                 let send_result = receiver.send(
-                    match response.error {
-                        Some(ref msg) => Err(ClientError::ResponseError(msg.to_string(), response)),
+                    match response.error() {
+                        Some(msg) => Err(ClientError::ResponseError(msg, response)),
                         None    => Ok(response),
                     }
                 );
                 if let Err(response) = &send_result {
                     warn!(
-                        transaction_id = response.as_ref().unwrap().transaction_id,
+                        transaction_id = response.as_ref().unwrap().transaction_id(),
                         response = ?response,
                         "transaction was not awaited"
                     );
                 }
             },
-            None => warn!(response.transaction_id, response = ?response, "received response for invalid transaction"),
+            None => warn!(transaction_id = response.transaction_id(), response = ?response, "received response for invalid transaction"),
         }
     }
 
@@ -192,14 +226,13 @@ impl Client {
         debug!("Transactions reset");
     }
 
-    #[tracing::instrument]
-    pub async fn ready(&self) {
-        self.ready.wait_ready().await
+    pub fn is_ready(&self) -> bool {
+        self.ready.is_ready()
     }
 
     #[tracing::instrument]
     async fn login(&self, session_id: &str)
-        -> Result<Response>
+        -> Result<LoginResponse>
     {
         let receiver = self.send(Command::Login {
             session_id: session_id.to_string(),
@@ -209,22 +242,37 @@ impl Client {
         let login_response = login_result?;
         let mut gateways_lock = self.gateways.write().await;
         gateways_lock.clear();
-        if let protocol::ResponseType::Login{ ref locations, .. } = login_response.data() {
-            for location in locations {
-                for gateway in &location.gateways {
-                    gateways_lock.insert(gateway.awl_id.clone(), gateway.clone());
+        match login_response {
+            Response::Login(data) => {
+                for location in &data.locations {
+                    for gateway in &location.gateways {
+                        gateways_lock.insert(gateway.awl_id.clone(), gateway.clone());
+                    }
                 }
-            }
-        }
 
-        self.ready.set_ready();
-        info!(gateways = ?*gateways_lock, "Successful login");
-        Ok(login_response)
+                self.ready.set_ready();
+                info!(gateways = ?*gateways_lock, "Successful login");
+
+                Ok(data)
+            },
+            _ => Err(ClientError::ResponseError("Should have gotten a Response::Login".to_string(), login_response)),
+        }
+    }
+
+    pub async fn get_gateways(&self)
+        -> Result<GatewayList>
+    {
+        let gateways = self.gateways.read().await;
+        if gateways.len() == 0 {
+            Err(ClientError::CommandFailed("get_gateways - no AWL gateways found".to_string()))
+        } else {
+            Ok((*gateways).clone())
+        }
     }
 
     #[tracing::instrument]
     pub async fn gateway_read(&self, awl_id: &str)
-        -> Result<Response>
+        -> Result<ReadResponse>
     {
         self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await?;
 
@@ -241,7 +289,7 @@ impl Client {
             gateway_metrics.push(metric.to_string());
         }
 
-        for zone_id in 1..max_zones {
+        for zone_id in 1..=max_zones {
             for suffix in protocol::DEFAULT_ZONE_RLIST_SUFFIXES.iter() {
                 let zone_metric = format!("{}{}{}", protocol::ZONE_RLIST_PREFIX, zone_id, suffix);
                 gateway_metrics.push(zone_metric);
@@ -257,7 +305,12 @@ impl Client {
         let receiver = self.send(request).await?;
         let read_result = timeout(COMMAND_TIMEOUT, receiver).await?
             .or(Err(ClientError::CommandFailed("read".to_string())))?;
-        Ok(read_result?)
+        let read_response = read_result?;
+
+        match read_response {
+            Response::Read(r) => Ok(r),
+            _ => Err(ClientError::ResponseError("Should have gotten a Response::Login".to_string(), read_response),)
+        }
     }
 
     #[tracing::instrument]
@@ -283,6 +336,17 @@ impl Client {
         trace!("Transaction {} inserted", request.transaction_id);
 
         Ok(receiver)
+    }
+
+    #[tracing::instrument]
+    pub async fn logout(&self) -> Result<()>
+    {
+        // Any logout errors are going to come from the connect() function,
+        // so the instance owner must await connect() or the join handle
+        // it was spawned with to receive any errors
+        self.shutdown.set_ready();
+        self.ready.wait_unready().await;
+        Ok(())
     }
 }
 
@@ -318,4 +382,10 @@ pub enum ClientError {
 
     #[error(transparent)]
     WebSockets(#[from] TungsteniteError),
+
+    #[error("WebSockets connection closed unexpectedly")]
+    ConnectionClosed,
+
+    #[error("Expected closure of client session, this error should never be unhandled")]
+    ExpectedTermination,
 }

@@ -12,17 +12,17 @@ use waterfurnace_symphony::{
     state::LoggedIn,
 };
 
-async fn establish_login_session(server: &Server)
+pub async fn establish_login_session(server: &Server)
     -> SessionResult<Session<state::Login>>
 {
-    let url = format!("http://localhost:{}/account/login", server.addr().port());
-    let config_url = format!("http://localhost:{}/ws_location.json", server.addr().port());
+    let url = server.get_login_uri();
+    let config_url = server.get_config_uri();
 
     let session = Session::new(&url, &config_url);
     session.login("test_user", "bad7a55").await
 }
 
-async fn establish_connected_session(server: &Server)
+pub async fn establish_connected_session(server: &Server)
     -> SessionResult<Session<state::Connected>>
 {
     let login_session = establish_login_session(server).await.unwrap();
@@ -39,7 +39,7 @@ async fn log_in() {
 
     match login_result {
         Ok(login_session) => {
-            assert!(login_session.get_token() == "0ddc0ffee0ddc0ffee0ddc0ffee");
+            assert!(login_session.get_token() == support::server::FAKE_SESSION_ID);
         },
         Err(e) => {
             println!("{}", e);
@@ -76,10 +76,13 @@ async fn send() {
  
     let session = establish_connected_session(&server).await.expect("session.connect() failed");
 
-    session.send_text("Hello").await.expect("session.send_text() failed");
+    session.send_text(support::server::HELLO_SEND).await.expect("session.send_text() failed");
     let reply = session.next().await.expect("No reply, WebSocket hung up")
         .expect("WebSocket error");
-    assert_eq!(reply.into_text().expect("Wasn't a Text frame"), "Hello".to_string());
+    assert_eq!(
+        reply.into_text().expect("Wasn't a Text frame"),
+        support::server::HELLO_REPLY.to_string()
+    );
 
     session.close().await.expect("session.close() failed");
 }

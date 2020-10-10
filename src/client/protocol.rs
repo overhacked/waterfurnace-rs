@@ -67,67 +67,71 @@ pub enum Command {
 #[derive(Serialize, Debug)]
 pub(super) struct Request {
     #[serde(rename = "tid")]
-    pub transaction_id: u8,
+    pub transaction_id: super::Tid,
     #[serde(flatten)]
     pub command: Command,
     pub source: String,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct Response {
-    #[serde(rename = "tid")]
-    pub(super) transaction_id: u8,
-    #[serde(rename = "err", default, deserialize_with="non_empty_str")]
-    pub(super) error: Option<String>,
-    #[serde(flatten)]
-    pub(super) data: ResponseType, // HashMap<String, Value>,
-    #[serde(flatten)]
-    pub(super) extra: HashMap<String, Value>,
+#[serde(tag = "rsp", rename_all = "lowercase")]
+pub enum Response {
+    Login(LoginResponse),
+    Read(ReadResponse),
 }
 
 impl Response {
-    pub fn is_ok(&self) -> bool {
-        self.error.is_none()
-    }
-
-    pub fn is_err(&self) -> bool {
-        !self.error.is_none()
+    pub fn transaction_id(&self) -> super::Tid {
+        match self {
+            Response::Login(r) => r.meta.transaction_id,
+            Response::Read(r) => r.meta.transaction_id,
+        }
     }
 
     pub fn error(&self) -> Option<String> {
-        self.error.clone()
-    }
-
-    pub fn data(&self) -> &ResponseType {
-        &self.data
-    }
-
-    pub fn extra(&self) -> &HashMap<String, Value> {
-        &self.extra
+        match self {
+            Response::Login(r) => r.meta.error.clone(),
+            Response::Read(r) => r.meta.error.clone(),
+        }
     }
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(tag = "rsp", rename_all = "lowercase")]
-pub enum ResponseType {
-    Login {
-        success: bool,
-        #[serde(rename = "firstname")]
-        first_name: String,
-        #[serde(rename = "lastname")]
-        last_name: String,
-        #[serde(rename = "emailaddress")]
-        email: String,
-        key: u64,
-        locations: Vec<ResponseLoginLocations>,
-    },
-    Read {
-        #[serde(rename = "awlid")]
-        awl_id: String,
-        #[serde(flatten)]
-        metrics: HashMap<String, Value>,
-    },
+pub struct ResponseMeta {
+    #[serde(rename = "tid")]
+    pub(super) transaction_id: super::Tid,
+    #[serde(rename = "err", default, deserialize_with="non_empty_str")]
+    pub(super) error: Option<String>,
+    #[serde(flatten)]
+    pub(super) extra: HashMap<String, Value>,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct LoginResponse {
+    #[serde(flatten)]
+    pub meta: ResponseMeta,
+    pub success: bool,
+    #[serde(rename = "firstname")]
+    pub first_name: String,
+    #[serde(rename = "lastname")]
+    pub last_name: String,
+    #[serde(rename = "emailaddress")]
+    pub email: String,
+    pub key: u64,
+    pub locations: Vec<ResponseLoginLocations>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ReadResponse {
+    #[serde(flatten)]
+    pub meta: ResponseMeta,
+    #[serde(rename = "awlid")]
+    pub awl_id: String,
+    #[serde(flatten)]
+    pub metrics: HashMap<String, Value>,
+}
+
+
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ResponseLoginLocations {

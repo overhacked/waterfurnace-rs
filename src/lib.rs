@@ -10,5 +10,11 @@ pub use session::{
     SessionError,
     state,
 };
-pub use client::{Client, Command};
+
+pub use client::{
+    Client,
+    ClientError,
+    Command
+};
+
 pub(crate) use ready_waiter::Waiter;

@@ -1,3 +1,5 @@
+mod ws;
+
 use std::collections::HashMap;
 use std::net;
 use std::str::FromStr;
@@ -19,7 +21,14 @@ use warp::{
 
 pub use http::Response;
 
-const FAKE_SESSION_ID: &str = "0ddc0ffee0ddc0ffee0ddc0ffee";
+pub const FAKE_SESSION_ID: &str = "0ddc0ffee0ddc0ffee0ddc0ffee";
+pub const HELLO_SEND: &str = "Hello";
+pub const HELLO_REPLY: &str = "Hola";
+pub const FAKE_GWID: &str = "0DDC0FFEE";
+pub const NUM_ZONES: u8 = 3;
+
+const LOGIN_PATH: &str = "account/login";
+const CONFIG_PATH: &str = "ws_location.json";
 
 pub struct Server {
     addr: net::SocketAddr,
@@ -30,6 +39,14 @@ pub struct Server {
 impl Server {
     pub fn addr(&self) -> net::SocketAddr {
         self.addr
+    }
+
+    pub fn get_login_uri(&self) -> String {
+        format!("http://localhost:{}/{}", self.addr().port(), LOGIN_PATH)
+    }
+
+    pub fn get_config_uri(&self) -> String {
+        format!("http://localhost:{}/{}", self.addr().port(), CONFIG_PATH)
     }
 }
 
@@ -91,6 +108,7 @@ pub fn http() -> Server
 }
 
 fn login_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    // Reminder: update const LOGIN_PATH
     warp::path!("account" / "login")
         .and(warp::post())
         .and(warp::cookie("legal-acknowledge"))
@@ -117,6 +135,7 @@ fn login_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rej
 }
 
 fn logout_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    // Reminder: update const LOGIN_PATH
     warp::path!("account" / "login")
         .and(warp::get())
         .and(warp::host::optional())
@@ -134,7 +153,7 @@ fn logout_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Re
 }
 
 fn wsconfig_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    warp::path("ws_location.json")
+    warp::path(CONFIG_PATH)
         .and(warp::get())
         .and(warp::host::optional())
         .map(|a: Option<warp::host::Authority>| {
@@ -150,10 +169,11 @@ fn ws_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Reject
 
 async fn handle_websocket_request(ws: warp::filters::ws::WebSocket) {
     let (mut tx, mut rx) = ws.split();
+    let mut message_handler = ws::MessageHandler::new();
     loop {
         match rx.next().await {
             Some(Ok(message)) if message.is_text() => {
-                tx.send(message).await
+                tx.send(message_handler.handle_websocket_message(message)).await
                     .expect("WebSocket send failure");
             },
             Some(Ok(message)) if message.is_binary() => panic!("Should not receive any binary frames"),
