@@ -33,7 +33,10 @@ async fn main() {
 
     let backend = Backend::start(config.username, config.password).await;
 
-    warp::serve(gateways_route(&backend.client)).run(([127, 0, 0, 1], 3030)).await;
+    let api_routes = gateways_route(&backend.client)
+        .or(zones_route(&backend.client));
+
+    warp::serve(api_routes).run(([127, 0, 0, 1], 3030)).await;
 }
 
 struct Backend {
@@ -61,11 +64,17 @@ impl Backend {
 }
 
 fn gateways_route(client: &Arc<wf::Client>) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let client = Arc::clone(client);
-
     warp::path("gateways")
+        .and(warp::path::end())
         .and(warp::get())
-        .and(with_client(client))
+        .and(with_client(client.clone()))
         .and_then(handlers::gateways_handler)
 }
 
+fn zones_route(client: &Arc<wf::Client>) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    warp::path!("gateways" / String / "zones")
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(with_client(client.clone()))
+        .and_then(handlers::zones_handler)
+}
