@@ -17,10 +17,11 @@ use protocol::{
 };
 
 use std::collections::HashMap;
+use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::Waiter;
+use crate::ready_waiter::Waiter;
 use crate::session::{
     Message,
     Session,
@@ -37,7 +38,7 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(30); // DEBUG
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 type Tid = u8;
-type GatewayList = HashMap<String, protocol::ResponseLoginGateway>;
+pub type ConnectResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 #[derive(Debug)]
 struct TransactionList {
@@ -46,12 +47,35 @@ struct TransactionList {
 }
 
 #[derive(Debug)]
+struct LoginData {
+    zone_counts: HashMap<String, u8>,
+    locations: Vec<protocol::ResponseLoginLocations>,
+}
+
+impl From<protocol::LoginResponse> for LoginData {
+    fn from(response: protocol::LoginResponse) -> Self {
+        let mut zone_counts: HashMap<String, u8> = HashMap::new();
+        let locations = response.locations.clone();
+        for location in &locations {
+            for gateway in &location.gateways {
+                zone_counts.insert(gateway.awl_id.clone(), gateway.max_zones);
+            }
+        }
+
+        LoginData {
+            zone_counts: zone_counts,
+            locations: locations,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Client {
     ready: Waiter,
     shutdown: Waiter,
     socket: Mutex<Option<mpsc::UnboundedSender<String>>>,
     transactions: Arc<Mutex<TransactionList>>,
-    gateways: RwLock<GatewayList>,
+    login_data: RwLock<Option<LoginData>>,
     awl_uri: String,
     awl_config_uri: String,
 }
@@ -72,7 +96,7 @@ impl Client {
                 last: Tid::MAX, // will wrap on first transaction
                 list: HashMap::new(),
             })),
-            gateways: RwLock::new(HashMap::new()),
+            login_data: RwLock::new(None),
             awl_uri: awl_login_uri.to_string(),
             awl_config_uri: awl_config_uri.to_string(),
         }
@@ -105,7 +129,7 @@ impl Client {
 
     #[tracing::instrument]
     pub async fn connect(&self, username: String, password: String)
-        -> std::result::Result<(), DynError>
+        -> ConnectResult
     {
         use state::LoggedIn;
 
@@ -124,7 +148,10 @@ impl Client {
                 self.login(&session_id),
             );
             session = match join_result {
-                Ok(j) => { j.0 },
+                Ok(j) => {
+                    // Return the Ok() result of handle_messages()
+                    j.0
+                },
                 Err(e) => {
                     if let ClientError::ExpectedTermination = e {
                         return Ok(());
@@ -232,41 +259,41 @@ impl Client {
 
     #[tracing::instrument]
     async fn login(&self, session_id: &str)
-        -> Result<LoginResponse>
+        -> Result<()>
     {
         let receiver = self.send(Command::Login {
             session_id: session_id.to_string(),
         }).await?;
         let login_result = timeout(COMMAND_TIMEOUT, receiver).await?
             .or(Err(ClientError::CommandFailed("login".to_string())))?;
+        let mut login_data = self.login_data.write().await;
         let login_response = login_result?;
-        let mut gateways_lock = self.gateways.write().await;
-        gateways_lock.clear();
         match login_response {
             Response::Login(data) => {
-                for location in &data.locations {
-                    for gateway in &location.gateways {
-                        gateways_lock.insert(gateway.awl_id.clone(), gateway.clone());
-                    }
-                }
+                info!(login_data = ?data, "Successful login");
 
+                // Put the response, converted to struct LoginData
+                // into self.login_data
+                *login_data = Some(data.into());
+
+                // Drop the lock before set_ready()
+                drop(login_data);
                 self.ready.set_ready();
-                info!(gateways = ?*gateways_lock, "Successful login");
 
-                Ok(data)
+                Ok(())
             },
             _ => Err(ClientError::ResponseError("Should have gotten a Response::Login".to_string(), login_response)),
         }
     }
 
-    pub async fn get_gateways(&self)
-        -> Result<GatewayList>
+    pub async fn get_locations(&self)
+        -> Result<Vec<protocol::ResponseLoginLocations>>
     {
-        let gateways = self.gateways.read().await;
-        if gateways.len() == 0 {
-            Err(ClientError::CommandFailed("get_gateways - no AWL gateways found".to_string()))
-        } else {
-            Ok((*gateways).clone())
+        match *self.login_data.read().await {
+            Some(ref data) => {
+                Ok(data.locations.clone())
+            },
+            None => Err(ClientError::CommandFailed("get_locations - no AWL login data found".to_string())),
         }
     }
 
@@ -276,10 +303,16 @@ impl Client {
     {
         self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await?;
 
-        let gateways_lock = self.gateways.read().await;
-        let gateway = gateways_lock.get(awl_id).ok_or(ClientError::UnknownGateway(awl_id.to_string()))?;
-        let max_zones = gateway.max_zones;
-        drop(gateways_lock);
+        let login_data_lock = self.login_data.read().await;
+        let max_zones = match *login_data_lock {
+            Some(ref data) => {
+                data.zone_counts.get(awl_id)
+                    .ok_or(ClientError::UnknownGateway(awl_id.to_string()))?
+                    .clone()
+            },
+            None => return Err(ClientError::UnknownGateway(awl_id.to_string())),
+        };
+        drop(login_data_lock);
 
         let zone_metrics_count = (max_zones as usize) * protocol::DEFAULT_ZONE_RLIST_SUFFIXES.len();
         let gateway_metrics_count = protocol::DEFAULT_READ_RLIST.len();
@@ -351,8 +384,6 @@ impl Client {
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
-
-type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Error, Debug)]
 pub enum ClientError {

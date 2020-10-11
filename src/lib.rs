@@ -4,17 +4,10 @@ mod client;
 mod session;
 mod ready_waiter;
 
-pub use session::{
-    Result as SessionResult,
-    Session,
-    SessionError,
-    state,
-};
-
 pub use client::{
     Client,
     ClientError,
-    Command
+    Command,
+    Result,
+    ConnectResult,
 };
-
-pub(crate) use ready_waiter::Waiter;
