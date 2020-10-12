@@ -68,7 +68,7 @@ impl Drop for Server {
 struct FailProbability(u8);
 
 impl FailProbability {
-    fn new(input: u8) -> Self {
+    pub fn new(input: u8) -> Self {
         if input > 100 {
             panic!("FailProbablity must be in the range 0-100, inclusive (got {})", input);
         }

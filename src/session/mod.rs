@@ -36,6 +36,13 @@ pub struct Session<S: state::SessionState> {
     config_uri: String,
 }
 
+impl<S: state::SessionState> Session<S>
+{
+    fn get_state(&self) -> &S {
+        &self.state
+    }
+}
+
 impl Session<state::Start> {
     pub fn new(uri: &str, config_uri: &str) -> Self {
         let redirect_policy =
@@ -304,3 +311,6 @@ pub enum SessionError {
 }
 
 pub type Result<T> = std::result::Result<T, SessionError>;
+
+#[cfg(test)]
+mod tests;

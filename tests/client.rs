@@ -1,17 +1,14 @@
-mod support;
-
 use futures::{
     self,
     Future
 };
-use support::*;
-use support::server::Server;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tracing_subscriber;
 
+use mock_symphony;
 use waterfurnace_symphony::{
     Client,
     ClientError,
@@ -19,7 +16,7 @@ use waterfurnace_symphony::{
 
 type ConnectReturnType = Result<(), std::boxed::Box<dyn Error + Send + Sync>>;
 
-async fn get_connected_client(server: &Server)
+async fn get_connected_client(server: &mock_symphony::Server)
     -> (Arc<Client>, tokio::task::JoinHandle<ConnectReturnType>,)
 {
 
@@ -68,7 +65,7 @@ async fn check_client_operations<O>(client: Arc<Client>, connect_h: tokio::task:
 async fn client_connect() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let server = server::http();
+    let server = mock_symphony::http();
 
     let (client, connect_h) = get_connected_client(&server).await;
 
@@ -81,14 +78,14 @@ async fn client_connect() {
 async fn client_read() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let server = server::http();
+    let server = mock_symphony::http();
 
     let (client, connect_h) = get_connected_client(&server).await;
     let client2 = Arc::clone(&client);
 
     check_client_operations(client2, connect_h, async {
-        let gateways = client.get_gateways().await.expect("No gateways found");
-        let some_gateway = gateways.keys().collect::<Vec<&String>>()[0];
+        let locations = client.get_locations().await.expect("No gateways found");
+        let some_gateway = &locations[0].gateways[0].awl_id;
         let read_response = client.gateway_read(some_gateway).await?;
         assert!(read_response.awl_id == *some_gateway);
         Ok::<(), ClientError>(())
