@@ -36,12 +36,6 @@ pub struct Session<S: state::SessionState> {
     config_uri: String,
 }
 
-impl<S: state::SessionState> Session<S> {
-    pub fn get_state(&self) -> &S {
-        &self.state
-    }
-}
-
 impl Session<state::Start> {
     pub fn new(uri: &str, config_uri: &str) -> Self {
         let redirect_policy =
@@ -190,13 +184,6 @@ impl Session<state::Connected> {
         where S: Into<String>,
     {
         self.send(Message::text(message)).await
-    }
-
-    pub async fn send_binary<B>(&self, message: B)
-        -> Result<()>
-        where B: Into<Vec<u8>>,
-    {
-        self.send(Message::binary(message)).await
     }
 
     #[tracing::instrument]

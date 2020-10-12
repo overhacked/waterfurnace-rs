@@ -73,7 +73,7 @@ pub(super) struct Request {
     pub source: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 #[serde(tag = "rsp", rename_all = "lowercase")]
 pub enum Response {
     Login(LoginResponse),
@@ -96,7 +96,7 @@ impl Response {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct ResponseMeta {
     #[serde(rename = "tid")]
     pub(super) transaction_id: super::Tid,
@@ -106,7 +106,7 @@ pub struct ResponseMeta {
     pub(super) extra: HashMap<String, Value>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct LoginResponse {
     #[serde(flatten)]
     pub meta: ResponseMeta,
@@ -121,7 +121,7 @@ pub struct LoginResponse {
     pub locations: Vec<ResponseLoginLocations>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct ReadResponse {
     #[serde(flatten)]
     pub meta: ResponseMeta,

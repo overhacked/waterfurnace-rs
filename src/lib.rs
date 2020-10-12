@@ -8,5 +8,8 @@ pub use client::{
     ClientError,
     Command,
     Result,
+    Response,
+    ReadResponse,
+    LoginResponse,
     ConnectResult,
 };

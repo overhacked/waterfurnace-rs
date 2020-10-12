@@ -10,15 +10,14 @@ use tracing;
 use tracing_futures;
 use tracing::{trace, debug, info, warn, error};
 
-pub use protocol::Command;
-use protocol::{
+pub use protocol::{
+    Command,
     Response,
-    ReadResponse,
     LoginResponse,
+    ReadResponse,
 };
 
 use std::collections::HashMap;
-use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -255,6 +254,15 @@ impl Client {
 
     pub fn is_ready(&self) -> bool {
         self.ready.is_ready()
+    }
+
+    pub async fn wait_ready(&self) {
+        self.ready.wait_ready().await
+    }
+
+    pub async fn wait_ready_timeout(&self, timeout: Duration) -> Result<()> {
+        self.ready.wait_ready_timeout(timeout).await?;
+        Ok(())
     }
 
     #[tracing::instrument]

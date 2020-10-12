@@ -7,11 +7,16 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-trait = "0.1.41"
+backoff = { version = "0.2", features = ["tokio"] }
+cached = "0.19.0"
+futures = "0.3.6"
 ready_waiter = { path = "../ready_waiter" }
 serde = "1.0.116"
 serde_json = "1.0.58"
 structopt = "0.3.19"
 tokio = "0.2.22"
+tracing = "0.1.21"
 tracing-subscriber = "0.2.13"
 warp = "0.2"
 waterfurnace_symphony = { path = "../", version = "0.1" }
