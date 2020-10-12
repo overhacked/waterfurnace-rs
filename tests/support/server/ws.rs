@@ -5,21 +5,34 @@ use serde_json::{
     Value
 };
 use std::collections::HashMap;
+use std::time::Duration;
 
 type Tid = u8;
 
-pub(super) struct MessageHandler {
-    last_tid: Tid,    
+pub(super) struct MessageHandler<F, D>
+where
+    F: rand::distributions::Distribution<bool>,
+    D: rand::distributions::Distribution<f64>,
+{
+    last_tid: Tid,
+    failure_fn: F,
+    delay_fn: D,
 }
 
-impl MessageHandler {
-    pub(super) fn new() -> Self {
+impl<F, D> MessageHandler<F, D>
+where
+    F: rand::distributions::Distribution<bool>,
+    D: rand::distributions::Distribution<f64>,
+{
+    pub(super) fn new(failure_fn: F, delay_fn: D) -> Self {
         MessageHandler {
             last_tid: 0, // Client starts at 1
+            failure_fn: failure_fn,
+            delay_fn: delay_fn,
         }
     }
 
-    pub(super) fn handle_websocket_message(&mut self, message: warp::ws::Message) -> warp::ws::Message {
+    pub(super) async fn handle_websocket_message(&mut self, message: warp::ws::Message) -> warp::ws::Message {
         assert!(message.is_text());
 
         // Early check for simple test message
@@ -39,10 +52,27 @@ impl MessageHandler {
         );
         self.last_tid = request.transaction_id;
 
+        if self.failure_fn.sample(&mut rand::thread_rng()) {
+            return self.generate_error(request);
+        } else {
+            let delay_ms = self.delay_fn.sample(&mut rand::thread_rng());
+            let delay = Duration::from_micros((delay_ms * 1000.0) as u64);
+            tokio::time::delay_for(delay).await;
+        }
+
         match request {
             req @ Request { command: Command::Login{..}, .. } => self.handle_login(req),
             req @ Request { command: Command::Read{..}, .. } => self.handle_read(req),
         }
+    }
+
+    fn generate_error(&mut self, request: Request) -> warp::ws::Message {
+        let response = Response {
+            transaction_id: request.transaction_id,
+            error: "Simulated error".to_string(),
+            data: ResponseType::Error,
+        };
+        warp::ws::Message::text(serde_json::to_string(&response).unwrap())
     }
 
     fn handle_login(&mut self, request: Request) -> warp::ws::Message {
@@ -181,6 +211,7 @@ pub enum ResponseType {
         #[serde(flatten)]
         metrics: HashMap<String, Value>,
     },
+    Error,
 }
 
 #[derive(Serialize, Debug, Clone)]
