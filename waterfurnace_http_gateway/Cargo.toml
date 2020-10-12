@@ -7,6 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+ready_waiter = { path = "../ready_waiter" }
 serde = "1.0.116"
 serde_json = "1.0.58"
 structopt = "0.3.19"

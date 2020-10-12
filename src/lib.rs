@@ -2,7 +2,6 @@
 
 mod client;
 mod session;
-mod ready_waiter;
 
 pub use client::{
     Client,

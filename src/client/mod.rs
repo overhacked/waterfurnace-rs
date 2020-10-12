@@ -1,5 +1,6 @@
 pub mod protocol;
 
+use ready_waiter::Waiter;
 use serde_json;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
@@ -21,7 +22,6 @@ use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ready_waiter::Waiter;
 use crate::session::{
     Message,
     Session,
