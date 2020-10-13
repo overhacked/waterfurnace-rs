@@ -7,8 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tracing_subscriber;
+use tracing::{debug, info};
 
-use mock_symphony;
+use mock_symphony::{
+    self,
+    Chaos,
+    FailProbability,
+};
 use waterfurnace_symphony::{
     Client,
     ClientError,
@@ -36,18 +41,20 @@ async fn get_connected_client(server: &mock_symphony::Server)
 async fn check_client_operations<O>(client: Arc<Client>, connect_h: tokio::task::JoinHandle<ConnectReturnType>, ops: O)
     where O: Future<Output = Result<(), ClientError>>
 {
-    let (connect_result, ops_result) = tokio::join! {
-        async {
-            connect_h.await.unwrap()
-        },
-        async {
-            ops.await?;
-            if client.is_ready() {
-                client.logout().await?;
-            }
-            Ok::<(), ClientError>(())
-        },
-    };
+    let (connect_result, ops_result) = tokio::join!(
+    async {
+        connect_h.await
+    },
+    async {
+        info!("Running test operations");
+        let ops_result = ops.await;
+        info!("Test operations succeeded");
+        if client.is_ready() {
+            info!("Logging out client");
+            client.logout().await?;
+        }
+        ops_result
+    });
 
     if let Err(e) = connect_result {
         println!("{}", e);
@@ -92,3 +99,26 @@ async fn client_read() {
     }).await;
 
 }
+
+#[tokio::test]
+async fn slow_server() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let server = mock_symphony::http_chaos(Chaos {
+        failure: FailProbability::never(),
+        delay_min: Duration::from_millis(1000),
+        delay_max: Duration::from_millis(5000),
+    });
+
+    let (client, connect_h) = get_connected_client(&server).await;
+    let client2 = Arc::clone(&client);
+
+    check_client_operations(client2, connect_h, async {
+        let locations = client.get_locations().await.expect("No gateways found");
+        let some_gateway = &locations[0].gateways[0].awl_id;
+        let read_response = client.gateway_read(some_gateway).await?;
+        assert!(read_response.awl_id == *some_gateway);
+        Ok::<(), ClientError>(())
+    }).await;
+}
+

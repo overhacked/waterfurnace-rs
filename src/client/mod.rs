@@ -297,6 +297,8 @@ impl Client {
     pub async fn get_locations(&self)
         -> Result<Vec<protocol::ResponseLoginLocations>>
     {
+        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await?;
+
         match *self.login_data.read().await {
             Some(ref data) => {
                 Ok(data.locations.clone())

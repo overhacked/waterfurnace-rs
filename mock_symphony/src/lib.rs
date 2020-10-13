@@ -14,6 +14,7 @@ use tokio::{
     runtime,
     sync::oneshot,
 };
+use tracing::debug;
 use warp::{
     self,
     Filter,
@@ -54,6 +55,7 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
+            debug!("Server{{}} dropped, shutting down warp thread");
             let _ = tx.send(());
         }
 
@@ -65,10 +67,20 @@ impl Drop for Server {
     }
 }
 
-struct FailProbability(u8);
+#[derive(Debug)]
+pub struct FailProbability(u8);
 
 impl FailProbability {
-    pub fn new(input: u8) -> Self {
+    pub fn never() -> Self
+    {
+        FailProbability(0)
+    }
+
+    pub fn always() -> Self {
+        FailProbability(100)
+    }
+
+    pub fn from_percent(input: u8) -> Self {
         if input > 100 {
             panic!("FailProbablity must be in the range 0-100, inclusive (got {})", input);
         }
@@ -76,15 +88,16 @@ impl FailProbability {
     }
 }
 
+#[derive(Debug)]
 pub struct Chaos {
-    failure_pct: FailProbability,
-    delay_min: Duration,
-    delay_max: Duration,
+    pub failure: FailProbability,
+    pub delay_min: Duration,
+    pub delay_max: Duration,
 }
 
 impl Chaos {
     fn failure_probability(&self) -> f64 {
-        self.failure_pct.0 as f64 / 100.0 
+        self.failure.0 as f64 / 100.0 
     }
 
     fn delay_mean(&self) -> Duration {
@@ -95,7 +108,7 @@ impl Chaos {
 impl Default for Chaos {
     fn default() -> Self {
         Chaos {
-            failure_pct: FailProbability(0),
+            failure: FailProbability(0),
             delay_min: Duration::default(),
             delay_max: Duration::default(),
         }
@@ -127,13 +140,11 @@ pub fn http_chaos(chaos: Chaos) -> Server
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (addr, srv) = rt.block_on(async move {
-            let filters = simulate_chaos(&chaos)
-                .and(
-                    login_route()
-                    .or(logout_route())
-                    .or(wsconfig_route())
-                    .or(ws_route(&chaos))
-                );
+            let filters = login_route()
+                .or(logout_route())
+                .or(wsconfig_route())
+                .and(simulate_chaos(&chaos))
+                .or(ws_route(&chaos));
             let localhost = net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1));
             warp::serve(filters)
                 .bind_with_graceful_shutdown(net::SocketAddr::new(localhost, 0), async {
@@ -167,21 +178,24 @@ pub fn http_chaos(chaos: Chaos) -> Server
 fn simulate_chaos(chaos: &Chaos) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
     let failure_fn = Bernoulli::new(chaos.failure_probability()).unwrap();
     let mean_delay_ms = (chaos.delay_mean().as_micros() / 1000) as f64;
-    let delay_fn = LogNormal::new(mean_delay_ms, 3.7).unwrap();
-
+    let delay_fn = LogNormal::new(0.0, 0.5).unwrap();
+    
     warp::any()
-        .map(move || (failure_fn, delay_fn,))
-        .and_then(|(failure_fn, delay_fn): (Bernoulli, LogNormal<f64>)| async move {
+        .map(move || (failure_fn, delay_fn, mean_delay_ms,))
+        .and_then(|(failure_fn, delay_fn, mean_delay_ms): (Bernoulli, LogNormal<f64>, f64)| async move {
             if failure_fn.sample(&mut rand::thread_rng()) {
+                debug!("Introducing request failure");
                 return Err(warp::reject::custom(ChaosError));
             } else {
-                let delay_ms = delay_fn.sample(&mut rand::thread_rng());
+                let delay_ms = delay_fn.sample(&mut rand::thread_rng()) * mean_delay_ms;
                 let delay = Duration::from_micros((delay_ms * 1000.0) as u64);
+                debug!("Introducing request delay = {:?}", delay);
                 tokio::time::delay_for(delay).await;
             }
             Ok(())
         })
         .untuple_one()
+        .boxed()
 }
 
 fn login_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
@@ -191,6 +205,7 @@ fn login_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rej
         .and(warp::cookie("legal-acknowledge"))
         .and(warp::body::form())
         .map(|legal_acknowledge: String, form_body: HashMap<String, String>| {
+            debug!("warp::path!(account/login)");
             assert!(legal_acknowledge == "yes", "Cookie `legal-acknowledge=yes` was not sent");
             assert!(form_body.get("op").unwrap() == "login");
             assert!(form_body.get("redirect").unwrap() == "/");
@@ -241,17 +256,17 @@ fn wsconfig_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::
 fn ws_route(chaos: &Chaos) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let failure_fn = Bernoulli::new(chaos.failure_probability()).unwrap();
     let mean_delay_ms = (chaos.delay_mean().as_micros() / 1000) as f64;
-    let delay_fn = LogNormal::new(mean_delay_ms, 3.7).unwrap();
+    let delay_fn = LogNormal::new(0.0, 0.5).unwrap();
 
-    let ws_handler = move |ws: warp::filters::ws::WebSocket| { handle_websocket_request(ws, failure_fn, delay_fn) };
+    let ws_handler = move |ws: warp::filters::ws::WebSocket| { handle_websocket_request(ws, failure_fn, delay_fn, mean_delay_ms) };
     warp::path("ws")
         .and(warp::filters::ws::ws())
         .map(move |ws: warp::filters::ws::Ws| ws.on_upgrade(ws_handler))
 }
 
-async fn handle_websocket_request(ws: warp::filters::ws::WebSocket, failure_fn: Bernoulli, delay_fn: LogNormal<f64>) {
+async fn handle_websocket_request(ws: warp::filters::ws::WebSocket, failure_fn: Bernoulli, delay_fn: LogNormal<f64>, mean_delay_ms: f64) {
     let (mut tx, mut rx) = ws.split();
-    let mut message_handler = ws::MessageHandler::new(failure_fn, delay_fn);
+    let mut message_handler = ws::MessageHandler::new(failure_fn, delay_fn, mean_delay_ms);
     loop {
         match rx.next().await {
             Some(Ok(message)) if message.is_text() => {

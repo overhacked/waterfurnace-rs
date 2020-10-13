@@ -6,6 +6,7 @@ use serde_json::{
 };
 use std::collections::HashMap;
 use std::time::Duration;
+use tracing::debug;
 
 type Tid = u8;
 
@@ -17,6 +18,7 @@ where
     last_tid: Tid,
     failure_fn: F,
     delay_fn: D,
+    mean_delay_ms: f64,
 }
 
 impl<F, D> MessageHandler<F, D>
@@ -24,11 +26,12 @@ where
     F: rand::distributions::Distribution<bool>,
     D: rand::distributions::Distribution<f64>,
 {
-    pub(super) fn new(failure_fn: F, delay_fn: D) -> Self {
+    pub(super) fn new(failure_fn: F, delay_fn: D, mean_delay_ms: f64) -> Self {
         MessageHandler {
             last_tid: 0, // Client starts at 1
             failure_fn: failure_fn,
             delay_fn: delay_fn,
+            mean_delay_ms: mean_delay_ms,
         }
     }
 
@@ -55,8 +58,9 @@ where
         if self.failure_fn.sample(&mut rand::thread_rng()) {
             return self.generate_error(request);
         } else {
-            let delay_ms = self.delay_fn.sample(&mut rand::thread_rng());
+            let delay_ms = self.delay_fn.sample(&mut rand::thread_rng()) * self.mean_delay_ms;
             let delay = Duration::from_micros((delay_ms * 1000.0) as u64);
+            debug!("Introducing websocket request delay = {:?}", delay);
             tokio::time::delay_for(delay).await;
         }
 
