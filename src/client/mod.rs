@@ -357,7 +357,7 @@ impl Client {
     }
 
     #[tracing::instrument]
-    pub async fn send(&self, command: Command)
+    async fn send(&self, command: Command)
         -> Result<oneshot::Receiver<Result<Response>>>
     {
         let request = protocol::Request {
