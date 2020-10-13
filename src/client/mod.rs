@@ -384,6 +384,11 @@ impl Client {
     #[tracing::instrument]
     pub async fn logout(&self) -> Result<()>
     {
+        // Wait for ready in the edge case that the
+        // caller calls connect() and logout() in really
+        // quick succession
+        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await?;
+
         // Any logout errors are going to come from the connect() function,
         // so the instance owner must await connect() or the join handle
         // it was spawned with to receive any errors
