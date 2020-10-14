@@ -14,7 +14,7 @@ use tokio::{
     runtime,
     sync::oneshot,
 };
-use tracing::debug;
+use tracing::{debug, error};
 use warp::{
     self,
     Filter,
@@ -96,6 +96,52 @@ pub struct Chaos {
 }
 
 impl Chaos {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn always_fail() -> Self {
+        let mut chaos = Self::default();
+        chaos.failure = FailProbability::always();
+        chaos
+    }
+
+    pub fn fail_at(mut self, probability: FailProbability) -> Self {
+        self.failure = probability;
+        self
+    }
+
+    pub fn delay_between_ms<T>(mut self, range: impl std::ops::RangeBounds<u64>) -> Self {
+        use std::ops::Bound;
+        enum End {
+            Start,
+            End,
+        }
+
+        let abs_bound = |end: End, bound: Bound<&u64>| -> Option<u64> {
+            let op = match end {
+                End::Start => u64::checked_add,
+                End::End => u64::checked_sub,
+            };
+            match bound {
+                Bound::Included(n) => Some(*n),
+                Bound::Excluded(n) => Some(op(*n, 1).expect("delay_between_ms overflow")),
+                Bound::Unbounded => None,
+            }
+        };
+        let start_abs = match abs_bound(End::Start, range.start_bound()) {
+            Some(b) => b,
+            None => 0,
+        };
+        let end_abs = match abs_bound(End::End, range.start_bound()) {
+            Some(b) => b,
+            None => panic!("delay_between_ms does not support unbounded range end, only start"),
+        };
+        self.delay_min = Duration::from_millis(start_abs);
+        self.delay_max = Duration::from_millis(end_abs);
+        self
+    }
+
     fn failure_probability(&self) -> f64 {
         self.failure.0 as f64 / 100.0 
     }
@@ -140,11 +186,12 @@ pub fn http_chaos(chaos: Chaos) -> Server
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (addr, srv) = rt.block_on(async move {
-            let filters = login_route()
+            let filters = simulate_chaos(&chaos)
+                .and(login_route()
                 .or(logout_route())
                 .or(wsconfig_route())
-                .and(simulate_chaos(&chaos))
-                .or(ws_route(&chaos));
+                .or(ws_route(&chaos)))
+                .recover(handle_rejection);
             let localhost = net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1));
             warp::serve(filters)
                 .bind_with_graceful_shutdown(net::SocketAddr::new(localhost, 0), async {
@@ -279,4 +326,23 @@ async fn handle_websocket_request(ws: warp::filters::ws::WebSocket, failure_fn: 
             None => break, // No more messages, client closed connection
         }
     }
+}
+
+async fn handle_rejection(err: warp::Rejection)
+    -> Result<impl warp::Reply, std::convert::Infallible>
+{
+    use warp::http::StatusCode;
+    let code =
+        if err.is_not_found()
+        { StatusCode::NOT_FOUND }
+        else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>()
+        { StatusCode::METHOD_NOT_ALLOWED }
+        else if let Some(_) = err.find::<ChaosError>()
+        { StatusCode::SERVICE_UNAVAILABLE }
+        else {
+        error!("unhandled custom rejection, returning 500 response: {:?}", err);
+        StatusCode::INTERNAL_SERVER_ERROR
+        };
+
+    Ok(warp::reply::with_status(warp::reply(), code))
 }

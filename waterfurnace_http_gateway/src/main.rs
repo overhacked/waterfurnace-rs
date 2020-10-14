@@ -31,7 +31,6 @@ async fn main() -> Result<()> {
 
     let config = Opt::from_args();
 
-    // TODO: configurable listen/port
     waterfurnace_http_gateway::run(config.listen.clone(), &config.username, &config.password).await?;
 
     Ok(())

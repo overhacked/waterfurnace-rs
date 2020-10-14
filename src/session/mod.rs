@@ -17,7 +17,7 @@ use tokio::sync::{
     Mutex,
     TryLockError,
 };
-use tracing::{self, debug, info,};
+use tracing::{self, trace, debug, info,};
 use tracing_futures;
 use url::Url;
 
@@ -44,6 +44,7 @@ impl<S: state::SessionState> Session<S>
 }
 
 impl Session<state::Start> {
+    #[tracing::instrument]
     pub fn new(uri: &str, config_uri: &str) -> Self {
         let redirect_policy =
             reqwest::redirect::Policy::custom(|attempt| {
@@ -59,6 +60,7 @@ impl Session<state::Start> {
             client: {reqwest::Client::builder()
                 .cookie_store(true)
                 .redirect(redirect_policy)
+                .timeout(HTTP_TIMEOUT)
                 .build().unwrap()
             },
             login_uri: uri.to_string(),
@@ -66,13 +68,14 @@ impl Session<state::Start> {
         }
     }
 
-    #[tracing::instrument(fields(password="********"))]
+    #[tracing::instrument(skip(self), fields(password="********"))]
     pub async fn login(self, username: &str, password: &str)
         -> Result<Session<state::Login>>
     {
         let mut login_headers = HeaderMap::new();
         login_headers.insert(COOKIE, HeaderValue::from_str("legal-acknowledge=yes").unwrap());
 
+        info!("Logging into Symphony...");
         let login_result = self.client.post(&self.login_uri)
             .headers(login_headers)
             .form(&[
@@ -87,6 +90,7 @@ impl Session<state::Start> {
         let session_cookie = login_response.cookies()
             .find(|c| c.name() == "sessionid")
             .ok_or(SessionError::InvalidCredentials)?;
+        debug!("Successfully logged into Symphony");
         Ok(Session {
             state: state::Login {
                 username: username.to_string(),
@@ -101,16 +105,17 @@ impl Session<state::Start> {
 }
 
 impl Session<state::Login> {
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub async fn logout(self)
         -> Result<Session<state::Start>>
     {
         let mut logout_uri = reqwest::Url::parse(&self.login_uri).unwrap();
         logout_uri.set_query(Some("op=logout"));
+        info!("Logging out of Symphony...");
         self.client.get(logout_uri)
-            .timeout(HTTP_TIMEOUT)
             .send().await
             .and_then(|r| r.error_for_status())?;
+        debug!("Successfully logged out of Symphony");
         Ok(Session {
             state: state::Start {},
             client: self.client,
@@ -119,12 +124,12 @@ impl Session<state::Login> {
         })
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub async fn connect(self)
         -> Result<Session<state::Connected>>
     {
         let ws_url = self.get_websockets_uri().await?;
-        info!("Connecting to {}", &ws_url);
+        info!("Connecting to Symphony WebSockets at {}", &ws_url);
         let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await?;
         debug!("Connected!");
         Ok(Session {
@@ -138,8 +143,9 @@ impl Session<state::Login> {
         })
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     async fn get_websockets_uri(&self) -> Result<Url> {
+        debug!("Fetching Symphony WebSockets URI from {}", &self.config_uri);
         let wssuri_result = self.client
             .get(&self.config_uri)
             .send().await;
@@ -170,17 +176,21 @@ impl state::LoggedIn for Session<state::Login> {
 }
 
 impl Session<state::Connected> {
+    #[tracing::instrument(skip(self))]
     pub async fn next(&self)
         -> Option<std::result::Result<TungsteniteMessage, TungsteniteError>>
     {
+        trace!("Awaiting next WebSockets message");
         let websocket_c = self.state.websocket.clone();
         let mut websocket_lock = websocket_c.lock().await;
         websocket_lock.next().await
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn send(&self, message: TungsteniteMessage)
         -> Result<()>
     {
+        trace!("Sending WebSockets message: {:?}", message);
         let websocket_c = self.state.websocket.clone();
         let mut websocket_lock = websocket_c.lock().await;
         Ok(websocket_lock.send(message).await?)
@@ -197,9 +207,11 @@ impl Session<state::Connected> {
     pub async fn close(self)
         -> Result<Session<state::Login>>
     {
+        info!("Closing Symphony WebSockets connection...");
         let mut websocket_lock = self.state.websocket.try_lock()?;
         websocket_lock.close(None).await?;
 
+        debug!("Successfully closed Symphony WebSockets connection.");
         Ok(Session {
             state: self.state.credentials,
             client: self.client,
@@ -208,10 +220,11 @@ impl Session<state::Connected> {
         })
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub async fn logout(self)
         -> Result<Session<state::Disconnected>>
     {
+        debug!("Logging out connected Symphony WebSockets connection");
         let credentials = self.state.credentials.clone();
         let login_session = self.close().await?;
         let start_session = login_session.logout().await?;
@@ -237,6 +250,7 @@ impl Session<state::Disconnected> {
     pub async fn login(self)
         -> Result<Session<state::Login>>
     {
+        debug!("Logging back into Symphony from disconnected session.");
         Session::new(&self.login_uri, &self.config_uri).login(
             &self.state.credentials.username,
             &self.state.credentials.password

@@ -17,8 +17,15 @@ serde = "1.0.116"
 serde_json = "1.0.58"
 structopt = "0.3.19"
 thiserror = "1.0.21"
-tokio = "0.2.22"
+tokio = { version = "0.2.22", features = ["rt-threaded", "tcp", "time", "macros"] }
 tracing = "0.1.21"
+tracing-futures = "0.2.4"
 tracing-subscriber = "0.2.13"
 warp = "0.2"
 waterfurnace_symphony = { path = "../", version = "0.1" }
+
+[dev-dependencies]
+mock_symphony = { path = "../mock_symphony" }
+reqwest = "0.10.8"
+tokio-test = "0.2.1"
+url = "2.1"

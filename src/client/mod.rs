@@ -126,12 +126,13 @@ impl Client {
         Ok(transactions.last)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub async fn connect(&self, username: String, password: String)
         -> ConnectResult
     {
         use state::LoggedIn;
 
+        info!("Connecting Session");
         let mut session =
             Session::new(&self.awl_uri, &self.awl_config_uri)
             .login(&username, &password).await?
@@ -139,7 +140,6 @@ impl Client {
         let (tx_client, mut tx_session) = mpsc::unbounded_channel();
         *(self.socket.lock().await) = Some(tx_client);
 
-        // TODO: implement retry logic
         loop {
             let session_id = session.get_token().to_owned();
             let join_result = tokio::try_join!(
@@ -200,12 +200,12 @@ impl Client {
                     }
                 },
                 _ = tokio::time::delay_until(timeout_at) => {
-                    debug!("Session timeout");
+                    info!("Planned session timeout");
                     self.ready.set_unready();
                     break;
                 },
                 _ = self.shutdown.wait_ready() => {
-                    debug!("Shutdown requested");
+                    info!("Shutdown requested");
                     self.ready.set_unready();
                     session.logout().await?;
                     self.reset_transactions().await;
@@ -217,7 +217,7 @@ impl Client {
         Ok(session)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     async fn commit_transaction(&self, response: Response) {
         let mut transactions_lock = self.transactions.lock().await;
         let transaction = transactions_lock.list.remove(&response.transaction_id());
@@ -244,7 +244,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     async fn reset_transactions(&self) {
         let transactions = &mut self.transactions.lock().await;
         transactions.list.clear();
@@ -265,10 +265,11 @@ impl Client {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     async fn login(&self, session_id: &str)
         -> Result<()>
     {
+        info!("Sending login command via WebSockets");
         let receiver = self.send(Command::Login {
             session_id: session_id.to_string(),
         }).await?;
@@ -307,7 +308,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub async fn gateway_read(&self, awl_id: &str)
         -> Result<ReadResponse>
     {
@@ -356,7 +357,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     async fn send(&self, command: Command)
         -> Result<oneshot::Receiver<Result<Response>>>
     {
@@ -381,7 +382,7 @@ impl Client {
         Ok(receiver)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub async fn logout(&self) -> Result<()>
     {
         // Wait for ready in the edge case that the
