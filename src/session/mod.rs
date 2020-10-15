@@ -36,6 +36,7 @@ pub struct Session<S: state::SessionState> {
     config_uri: String,
 }
 
+#[cfg(test)]
 impl<S: state::SessionState> Session<S>
 {
     fn get_state(&self) -> &S {
