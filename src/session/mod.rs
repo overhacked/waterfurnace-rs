@@ -186,7 +186,7 @@ impl Session<state::Connected> {
         websocket_lock.next().await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, message))]
     pub async fn send(&self, message: TungsteniteMessage)
         -> Result<()>
     {

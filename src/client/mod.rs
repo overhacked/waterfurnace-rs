@@ -127,7 +127,7 @@ impl Client {
         Ok(transactions.last)
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, username, password), err)]
     pub async fn connect(&self, username: String, password: String)
         -> ConnectResult
     {
@@ -170,6 +170,7 @@ impl Client {
         }
     }
 
+    #[tracing::instrument(skip(self, session, tx_channel))]
     async fn handle_messages(&self, session: Session<state::Connected>, tx_channel: &mut mpsc::UnboundedReceiver<String>)
         -> Result<Session<state::Connected>>
     {
@@ -390,7 +391,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, command))]
     async fn send(&self, command: Command)
         -> Result<oneshot::Receiver<Result<Response>>>
     {
