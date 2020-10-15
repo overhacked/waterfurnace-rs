@@ -156,6 +156,8 @@ impl Client {
                     if let ClientError::ExpectedTermination = e {
                         return Ok(());
                     } else {
+                        self.ready.set_unready();
+                        self.shutdown().await?;
                         return Err(e.into());
                     }
                 }
@@ -202,6 +204,8 @@ impl Client {
                     self.ready.set_unready();
                     session.logout().await?;
                     self.reset_transactions().await;
+                    // Shutdown finished
+                    self.shutdown.set_unready();
                     return Err(ClientError::ExpectedTermination);
                 },
             };
@@ -428,8 +432,16 @@ impl Client {
         // Any logout errors are going to come from the connect() function,
         // so the instance owner must await connect() or the join handle
         // it was spawned with to receive any errors
+        self.shutdown().await?;
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self))]
+    async fn shutdown(&self) -> Result<()>
+    {
         self.shutdown.set_ready();
-        self.ready.wait_unready().await;
+        self.shutdown.wait_unready_timeout(COMMAND_TIMEOUT).await
+            .map_err(|_| ClientError::CommandTimeout("shutdown".to_string()))?;
         Ok(())
     }
 }
