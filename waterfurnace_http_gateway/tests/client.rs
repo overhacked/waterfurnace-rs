@@ -27,10 +27,13 @@ static INIT_TRACING: Once = Once::new();
 async fn login_success() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
-	let (base, gateway_h) = util::run_gateway_with_mock(None).await;
+	// NOTE TO FUTURE SELF: don't make _server a bare underscore,
+	// or the mock_symphony::Server will be dropped before it even
+	// starts.
+	let (base, _server) = util::run_gateway_with_mock().await;
 
 	let gateways_uri = base.join("/gateways")?;
-	let gateways_response = get(gateways_uri).await?
+	get(gateways_uri).await?
 		.error_for_status()?;
 
 	Ok(())
@@ -40,7 +43,7 @@ async fn login_success() -> Result<(), Box<dyn std::error::Error>> {
 async fn login_failure() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
-	let (base, gateway_h) = util::run_gateway_with_mock(Some(Chaos::always_fail())).await;
+	let (base, _server) = util::run_chaos_gateway_with_mock(Chaos::always_fail()).await;
 
 	let gateways_uri = base.join("/gateways")?;
 	assert_eq!(get(gateways_uri.clone()).await?.status(), StatusCode::GATEWAY_TIMEOUT);
