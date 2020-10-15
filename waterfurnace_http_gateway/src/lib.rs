@@ -3,7 +3,6 @@ mod handlers;
 mod routes;
 
 use backoff::{ExponentialBackoff, backoff::Backoff};
-use futures::future::{self, Either};
 use std::net::SocketAddr;
 use std::sync::{
     Arc,
@@ -15,7 +14,6 @@ use std::sync::{
 use thiserror::Error;
 use tracing::{
     trace,
-    debug,
     info,
     warn,
     error,
@@ -69,7 +67,6 @@ where
                         return Err(ServerError::ClientGone);
                     },
                     Err(client_err) => { /* client error, retry */
-                        warn!("Client error, retrying...");
                         // Set the server to an unready state, so it
                         // can start serving errors to HTTP clients
                         ready.store(false, Ordering::Release);
@@ -80,7 +77,7 @@ where
                             None => return Err(ServerError::RetryGiveUp),
                         };
 
-                        error!("waterfurnace_symphony::ClientError: {:?}", client_err);
+                        warn!(err = ?client_err, "Symphony client error, retrying after {:?}", next_backoff);
                         // Re-spawn the connection
                         connect_h = spawn_connection(client.clone(), &username, &password);
 
@@ -93,6 +90,7 @@ where
                         // so the retry loop will continue until backoff.next_backoff()
                         // returns None (currently never, until a config flag is added)
                         if let Ok(_) = client.wait_ready_timeout(next_backoff).await {
+                            info!("Client ready again, enabling gateway routes");
                             // Tell the server to start serving requests normally
                             ready.store(true, Ordering::Release);
 
@@ -119,7 +117,7 @@ where
     }
 }
 
-#[tracing::instrument(skip(client), fields(password = "********"))]
+#[tracing::instrument(skip(client, username, password))]
 fn spawn_connection(client: Arc<wf::Client>, username: &str, password: &str) -> tokio::task::JoinHandle<wf::ConnectResult> {
     let connect_username = username.to_string();
     let connect_password = password.to_string();
