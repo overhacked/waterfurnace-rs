@@ -32,6 +32,7 @@ pub const NUM_ZONES: u8 = 3;
 const LOGIN_PATH: &str = "account/login";
 const CONFIG_PATH: &str = "ws_location.json";
 
+#[derive(Debug)]
 pub struct Server {
     addr: net::SocketAddr,
     panic_rx: mpsc::Receiver<()>,
@@ -50,14 +51,22 @@ impl Server {
     pub fn get_config_uri(&self) -> String {
         format!("http://localhost:{}/{}", self.addr().port(), CONFIG_PATH)
     }
-}
+    
+    pub fn shutdown(mut self) {
+        self._shutdown();
+    }
 
-impl Drop for Server {
-    fn drop(&mut self) {
+    fn _shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             debug!("Server{{}} dropped, shutting down warp thread");
             let _ = tx.send(());
         }
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self._shutdown();
 
         if !::std::thread::panicking() {
             self.panic_rx
@@ -96,6 +105,10 @@ pub struct Chaos {
 }
 
 impl Chaos {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn none() -> Self {
         Self::default()
     }
@@ -165,16 +178,11 @@ impl Default for Chaos {
 struct ChaosError;
 impl warp::reject::Reject for ChaosError {}
 
-/*
- * TODO: Chaos
- * - % of requests fail (500 Server Error)
- * - Delay with deviation
- */
 pub fn http() -> Server {
-    http_chaos(Chaos::default())
+    http_chaos(Chaos::default(), None)
 }
 
-pub fn http_chaos(chaos: Chaos) -> Server
+pub fn http_chaos(chaos: Chaos, port: Option<u16>) -> Server
 {
     //Spawn new runtime in thread to prevent reactor execution context conflict
     thread::spawn(move || {
@@ -193,8 +201,9 @@ pub fn http_chaos(chaos: Chaos) -> Server
                 .or(ws_route(&chaos)))
                 .recover(handle_rejection);
             let localhost = net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1));
+            let port = port.unwrap_or(0);
             warp::serve(filters)
-                .bind_with_graceful_shutdown(net::SocketAddr::new(localhost, 0), async {
+                .bind_with_graceful_shutdown(net::SocketAddr::new(localhost, port), async {
                     shutdown_rx.await.ok();
                 })
         });
@@ -322,7 +331,7 @@ async fn handle_websocket_request(ws: warp::filters::ws::WebSocket, failure_fn: 
             },
             Some(Ok(message)) if message.is_binary() => panic!("Should not receive any binary frames"),
             Some(Ok(_)) => {}, // Ignore all other message types (Ping, Pong, Close)
-            Some(Err(e)) => panic!("WebSocket error: {}", e),
+            Some(Err(e)) => panic!("{}", e),
             None => break, // No more messages, client closed connection
         }
     }

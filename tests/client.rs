@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tracing_subscriber;
-use tracing::{debug, info};
+use tracing::info;
 
 use mock_symphony::{
     self,
@@ -108,7 +108,7 @@ async fn slow_server() {
         failure: FailProbability::never(),
         delay_min: Duration::from_millis(1000),
         delay_max: Duration::from_millis(5000),
-    });
+    }, None);
 
     let (client, connect_h) = get_connected_client(&server).await;
     let client2 = Arc::clone(&client);
