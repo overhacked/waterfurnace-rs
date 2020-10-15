@@ -4,7 +4,7 @@ use ready_waiter::Waiter;
 use serde_json;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
-use tokio::time::{timeout, Elapsed, Instant};
+use tokio::time::{timeout, Instant};
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tracing;
 use tracing_futures;
@@ -289,7 +289,8 @@ impl Client {
     }
 
     pub async fn wait_ready_timeout(&self, timeout: Duration) -> Result<()> {
-        self.ready.wait_ready_timeout(timeout).await?;
+        self.ready.wait_ready_timeout(timeout).await
+            .map_err(|_| ClientError::CommandTimeout("(in wait_ready_timeout)".to_string()))?;
         Ok(())
     }
 
@@ -301,7 +302,8 @@ impl Client {
         let receiver = self.send(Command::Login {
             session_id: session_id.to_string(),
         }).await?;
-        let login_result = timeout(COMMAND_TIMEOUT, receiver).await?
+        let login_result = timeout(COMMAND_TIMEOUT, receiver).await
+            .map_err(|_| ClientError::CommandTimeout("login".to_string()))?
             .or(Err(ClientError::CommandFailed("login".to_string())))?;
         let mut login_data = self.login_data.write().await;
         let login_response = login_result?;
@@ -326,7 +328,8 @@ impl Client {
     pub async fn get_locations(&self)
         -> Result<Vec<protocol::ResponseLoginLocations>>
     {
-        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await?;
+        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await
+            .map_err(|_| ClientError::CommandTimeout("get_locations::wait_ready".to_string()))?;
 
         match *self.login_data.read().await {
             Some(ref data) => {
@@ -340,7 +343,8 @@ impl Client {
     pub async fn gateway_read(&self, awl_id: &str)
         -> Result<ReadResponse>
     {
-        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await?;
+        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await
+            .map_err(|_| ClientError::CommandTimeout("gateway_read::wait_ready".to_string()))?;
 
         let login_data_lock = self.login_data.read().await;
         let max_zones = match *login_data_lock {
@@ -375,8 +379,9 @@ impl Client {
         };
 
         let receiver = self.send(request).await?;
-        let read_result = timeout(COMMAND_TIMEOUT, receiver).await?
-            .or(Err(ClientError::CommandFailed("read".to_string())))?;
+        let read_result = timeout(COMMAND_TIMEOUT, receiver).await
+            .map_err(|_| ClientError::CommandTimeout("gateway_read".to_string()))?
+            .or(Err(ClientError::CommandFailed("gateway_read".to_string())))?;
         let read_response = read_result?;
 
         match read_response {
@@ -416,7 +421,8 @@ impl Client {
         // Wait for ready in the edge case that the
         // caller calls connect() and logout() in really
         // quick succession
-        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await?;
+        self.ready.wait_ready_timeout(COMMAND_TIMEOUT).await
+            .map_err(|_| ClientError::CommandTimeout("logout".to_string()))?;
 
         // Any logout errors are going to come from the connect() function,
         // so the instance owner must await connect() or the join handle
@@ -434,8 +440,8 @@ pub enum ClientError {
     #[error("Command failed: {0}")]
     CommandFailed(String),
 
-    #[error("Command timed out after {0}")]
-    CommandTimeout(#[from] Elapsed),
+    #[error("Command timed out: {0}")]
+    CommandTimeout(String),
 
     #[error("Response error: {0}")]
     ResponseError(String, Response),
