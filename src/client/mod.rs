@@ -39,10 +39,11 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 type Tid = u8;
 pub type ConnectResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>;
 
+type Transaction = oneshot::Sender<Result<Response>>;
 #[derive(Debug)]
 struct TransactionList {
     last: Tid,
-    list: HashMap<Tid, oneshot::Sender<Result<Response>>>,
+    list: HashMap<Tid, Transaction>,
 }
 
 #[derive(Debug)]
@@ -179,16 +180,7 @@ impl Client {
                     match next_result {
                         Some(msg) => {
                             debug!("Received message: {:?}", msg);
-                            match msg? {
-                                Message::Text(json) => {
-                                    trace!(%json);
-                                    match serde_json::from_str::<Response>(&json) {
-                                        Ok(response) => self.commit_transaction(response).await,
-                                        Err(e) => error!(json = %json, error = %e, "failed to deserialize response"),
-                                    }
-                                },
-                                _ => continue,
-                            }
+                            self.process_message(msg?).await;
                         },
                         None => return Err(ClientError::ConnectionClosed),
                     }
@@ -217,12 +209,37 @@ impl Client {
         Ok(session)
     }
 
-    #[tracing::instrument(skip(self))]
-    async fn commit_transaction(&self, response: Response) {
-        let mut transactions_lock = self.transactions.lock().await;
-        let transaction = transactions_lock.list.remove(&response.transaction_id());
-        drop(transactions_lock);
+    async fn process_message(&self, message: Message) {
+        // Silently discard all non-Text message types
+        if let Message::Text(json) = message {
+            trace!(%json);
+            match serde_json::from_str::<Response>(&json) {
+                Ok(response) => self.commit_transaction(response).await,
+                Err(e) => {
+                    // try to recover by getting just the transaction_id
+                    // and error out of the response
+                    match serde_json::from_str::<protocol::ResponseMeta>(&json) {
+                        Ok(err_meta) => {
+                            let err_message = if let Some(s) = err_meta.error { s } else { "".to_string() };
+                            error!(transaction_id = %err_meta.transaction_id, error = %err_message, "Symphony error");
+                            self.cancel_transaction(err_meta.transaction_id).await;
+                        },
+                        Err(_) => error!(json = %json, error = %e, "failed to deserialize response"),
+                    }
+                },
+            }
+        }
+    }
 
+    #[tracing::instrument(skip(self))]
+    async fn find_transaction(&self, transaction_id: Tid) -> Option<Transaction> {
+        let mut transactions_lock = self.transactions.lock().await;
+        transactions_lock.list.remove(&transaction_id)
+    }
+
+    #[tracing::instrument(skip(self, response))]
+    async fn commit_transaction(&self, response: Response) {
+        let transaction = self.find_transaction(response.transaction_id()).await;
         match transaction {
             Some(receiver) => {
                 debug!(?response);
@@ -241,6 +258,17 @@ impl Client {
                 }
             },
             None => warn!(transaction_id = response.transaction_id(), response = ?response, "received response for invalid transaction"),
+        }
+    }
+
+    #[tracing::instrument(skip(self))]
+    async fn cancel_transaction(&self, transaction_id: Tid) {
+        let transaction = self.find_transaction(transaction_id).await;
+        match transaction {
+            Some(receiver) => {
+                drop(receiver);
+            },
+            None => warn!(transaction_id, "tried to cancel invalid transaction"),
         }
     }
 
