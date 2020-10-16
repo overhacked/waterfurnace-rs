@@ -77,7 +77,7 @@ async fn send() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let server = mock_symphony::http();
- 
+
     let session = establish_connected_session(&server).await.expect("session.connect() failed");
 
     session.send_text(mock_symphony::HELLO_SEND).await.expect("session.send_text() failed");

@@ -51,7 +51,7 @@ impl Server {
     pub fn get_config_uri(&self) -> String {
         format!("http://localhost:{}/{}", self.addr().port(), CONFIG_PATH)
     }
-    
+
     pub fn shutdown(mut self) {
         self._shutdown();
     }
@@ -156,11 +156,11 @@ impl Chaos {
     }
 
     fn failure_probability(&self) -> f64 {
-        self.failure.0 as f64 / 100.0 
+        self.failure.0 as f64 / 100.0
     }
 
     fn delay_mean(&self) -> Duration {
-        (self.delay_max + self.delay_min) / 2 
+        (self.delay_max + self.delay_min) / 2
     }
 }
 
@@ -235,7 +235,7 @@ fn simulate_chaos(chaos: &Chaos) -> impl Filter<Extract = (), Error = warp::Reje
     let failure_fn = Bernoulli::new(chaos.failure_probability()).unwrap();
     let mean_delay_ms = (chaos.delay_mean().as_micros() / 1000) as f64;
     let delay_fn = LogNormal::new(0.0, 0.5).unwrap();
-    
+
     warp::any()
         .map(move || (failure_fn, delay_fn, mean_delay_ms,))
         .and_then(|(failure_fn, delay_fn, mean_delay_ms): (Bernoulli, LogNormal<f64>, f64)| async move {

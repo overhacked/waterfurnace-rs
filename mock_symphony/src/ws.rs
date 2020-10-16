@@ -111,7 +111,7 @@ where
                                     gateway_type: ResponseGatewayType::AWL,
                                     online: 1,
                                     max_zones: super::NUM_ZONES,
-                                    zone_names: zone_names, 
+                                    zone_names: zone_names,
                                 }],
                             }],
                         }
