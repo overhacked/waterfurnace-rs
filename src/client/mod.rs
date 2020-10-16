@@ -153,11 +153,10 @@ impl Client {
                     j.0
                 },
                 Err(e) => {
+                    self.ready.set_unready();
                     if let ClientError::ExpectedTermination = e {
                         return Ok(());
                     } else {
-                        self.ready.set_unready();
-                        self.shutdown().await?;
                         return Err(e.into());
                     }
                 }
