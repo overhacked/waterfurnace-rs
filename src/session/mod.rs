@@ -179,12 +179,14 @@ impl state::LoggedIn for Session<state::Login> {
 impl Session<state::Connected> {
     #[tracing::instrument(skip(self))]
     pub async fn next(&self)
-        -> Option<std::result::Result<TungsteniteMessage, TungsteniteError>>
+        -> Result<Option<TungsteniteMessage>>
     {
         trace!("Awaiting next WebSockets message");
         let websocket_c = self.state.websocket.clone();
         let mut websocket_lock = websocket_c.lock().await;
         websocket_lock.next().await
+            .transpose()
+            .map_err(SessionError::WebSockets)
     }
 
     #[tracing::instrument(skip(self, message))]

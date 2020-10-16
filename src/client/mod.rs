@@ -179,10 +179,10 @@ impl Client {
         loop {
             tokio::select! {
                 next_result = session.next() => {
-                    match next_result {
+                    match next_result? {
                         Some(msg) => {
                             debug!("Received message: {:?}", msg);
-                            self.process_message(msg?).await;
+                            self.process_message(msg).await;
                         },
                         None => return Err(ClientError::ConnectionClosed),
                     }
