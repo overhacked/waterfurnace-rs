@@ -15,7 +15,7 @@ use tokio_test::{assert_ok, assert_err};
 use tracing::debug;
 use tracing_subscriber::{
 	filter::EnvFilter,
-	//fmt::format::FmtSpan,
+	fmt::format::FmtSpan,
 };
 use util::get;
 use warp::http::StatusCode;
@@ -127,9 +127,13 @@ async fn cache_is_working() -> Result<(), Box<dyn std::error::Error>> {
 
 fn init_tracing() {
 	INIT_TRACING.call_once(|| {
-		tracing_subscriber::fmt()
-			.with_env_filter(EnvFilter::from_default_env())
-			//.with_span_events(FmtSpan::ACTIVE)
+		let mut subscriber = tracing_subscriber::fmt()
+			.with_env_filter(EnvFilter::from_default_env());
+		subscriber = match std::env::var("TRACING_SPANS") {
+			Ok(val) if val != "" => subscriber.with_span_events(FmtSpan::ACTIVE),
+			_ => subscriber,
+		};
+		subscriber
 			.try_init()
 			.expect("Could not initialize tracing_subscriber");
 	});
