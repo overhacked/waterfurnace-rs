@@ -5,7 +5,6 @@ use mock_symphony::{
     Chaos,
     FailProbability,
 };
-use net2::TcpBuilder;
 use std::sync::Once;
 use std::time::Duration;
 use tokio::{
@@ -61,9 +60,7 @@ async fn login_failure() -> Result<(), Box<dyn std::error::Error>> {
 async fn server_goes_away() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
-	let port = find_unbound_port();
-
-	let (base, pre_failure) = util::run_gateway_with_mock_on_port(port).await;
+	let (base, pre_failure) = util::run_gateway_with_mock().await;
 
 	let gateways_uri = base.join("/gateways")?;
 	assert_eq!(get(gateways_uri.clone()).await?.status(), StatusCode::OK);
@@ -72,6 +69,7 @@ async fn server_goes_away() -> Result<(), Box<dyn std::error::Error>> {
 	assert_eq!(get(read_uri.clone()).await?.status(), StatusCode::OK);
 
 	debug!("Shutting down mock server");
+	let port = pre_failure.addr().port();
 	pre_failure.shutdown();
 
 	// Wait long enough for the cache to expire: see src/cached_client.rs
@@ -125,15 +123,6 @@ async fn cache_is_working() -> Result<(), Box<dyn std::error::Error>> {
 		}).await
 	);
 	Ok(())
-}
-
-fn find_unbound_port() -> u16 {
-	// Yes, this creates a TOCTOU problem
-	let builder = TcpBuilder::new_v4().unwrap();
-	let builder = builder.bind(("127.0.0.1", 0)).unwrap();
-	let addr = builder.local_addr().unwrap();
-	drop(builder.to_tcp_stream());
-	addr.port()
 }
 
 fn init_tracing() {
