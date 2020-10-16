@@ -171,7 +171,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self, session, tx_channel))]
+    #[tracing::instrument(skip(self, session, tx_channel), level = "debug")]
     async fn handle_messages(&self, session: Session<state::Connected>, tx_channel: &mut mpsc::UnboundedReceiver<String>)
         -> Result<Session<state::Connected>>
     {
@@ -235,18 +235,17 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "trace")]
     async fn find_transaction(&self, transaction_id: Tid) -> Option<Transaction> {
         let mut transactions_lock = self.transactions.lock().await;
         transactions_lock.list.remove(&transaction_id)
     }
 
-    #[tracing::instrument(skip(self, response))]
+    #[tracing::instrument(skip(self, response), level = "trace")]
     async fn commit_transaction(&self, response: Response) {
         let transaction = self.find_transaction(response.transaction_id()).await;
         match transaction {
             Some(receiver) => {
-                debug!(?response);
                 let send_result = receiver.send(
                     match response.error() {
                         Some(msg) => Err(ClientError::ResponseError(msg, response)),
@@ -265,7 +264,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "warn")]
     async fn cancel_transaction(&self, transaction_id: Tid) {
         let transaction = self.find_transaction(transaction_id).await;
         match transaction {
@@ -276,7 +275,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "debug")]
     async fn reset_transactions(&self) {
         let transactions = &mut self.transactions.lock().await;
         transactions.list.clear();
@@ -343,7 +342,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "debug")]
     pub async fn gateway_read(&self, awl_id: &str)
         -> Result<ReadResponse>
     {
@@ -394,7 +393,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self, command))]
+    #[tracing::instrument(skip(self, command), level = "trace")]
     async fn send(&self, command: Command)
         -> Result<oneshot::Receiver<Result<Response>>>
     {
@@ -435,7 +434,7 @@ impl Client {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "debug")]
     async fn shutdown(&self) -> Result<()>
     {
         self.shutdown.set_ready();

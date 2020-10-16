@@ -28,7 +28,7 @@ impl Waiter {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "trace")]
     pub fn set(&self, is_ready: bool) {
         self.ready_tx.broadcast(is_ready).unwrap();
         trace!("set value");
@@ -46,7 +46,7 @@ impl Waiter {
         *self.ready_rx.borrow()
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "trace")]
     pub async fn wait(&self, is_ready: bool) {
         debug!("waiting");
         let mut rx = self.ready_rx.clone();

@@ -117,7 +117,7 @@ where
     }
 }
 
-#[tracing::instrument(skip(client, username, password))]
+#[tracing::instrument(skip(client, username, password), level = "debug")]
 fn spawn_connection(client: Arc<wf::Client>, username: &str, password: &str) -> tokio::task::JoinHandle<wf::ConnectResult> {
     let connect_username = username.to_string();
     let connect_password = password.to_string();

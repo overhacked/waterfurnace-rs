@@ -45,7 +45,7 @@ impl<S: state::SessionState> Session<S>
 }
 
 impl Session<state::Start> {
-    #[tracing::instrument]
+    #[tracing::instrument(level = "debug")]
     pub fn new(uri: &str, config_uri: &str) -> Self {
         let redirect_policy =
             reqwest::redirect::Policy::custom(|attempt| {
@@ -125,7 +125,7 @@ impl Session<state::Login> {
         })
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "debug")]
     pub async fn connect(self)
         -> Result<Session<state::Connected>>
     {
@@ -144,7 +144,7 @@ impl Session<state::Login> {
         })
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "trace")]
     async fn get_websockets_uri(&self) -> Result<Url> {
         debug!("Fetching Symphony WebSockets URI from {}", &self.config_uri);
         let wssuri_result = self.client
@@ -177,7 +177,7 @@ impl state::LoggedIn for Session<state::Login> {
 }
 
 impl Session<state::Connected> {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), level = "trace")]
     pub async fn next(&self)
         -> Result<Option<TungsteniteMessage>>
     {
@@ -189,7 +189,7 @@ impl Session<state::Connected> {
             .map_err(SessionError::WebSockets)
     }
 
-    #[tracing::instrument(skip(self, message))]
+    #[tracing::instrument(skip(self, message), level = "trace")]
     pub async fn send(&self, message: TungsteniteMessage)
         -> Result<()>
     {
@@ -206,7 +206,7 @@ impl Session<state::Connected> {
         self.send(Message::text(message)).await
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(level = "debug")]
     pub async fn close(self)
         -> Result<Session<state::Login>>
     {

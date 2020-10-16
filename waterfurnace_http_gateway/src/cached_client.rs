@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use cached::proc_macro::cached;
 use waterfurnace_symphony as wf;
+use tracing;
 
 #[async_trait]
 pub(crate) trait CachedClient {
@@ -9,6 +10,7 @@ pub(crate) trait CachedClient {
 
 #[async_trait]
 impl CachedClient for wf::Client {
+    #[tracing::instrument(skip(self), level = "debug")]
     async fn cached_gateway_read(&self, awl_id: &str) -> wf::Result<wf::ReadResponse> {
         cached_gateway_read_impl(self, awl_id).await
     }
