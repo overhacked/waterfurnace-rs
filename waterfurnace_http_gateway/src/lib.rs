@@ -28,6 +28,16 @@ pub async fn run(addr: impl Into<SocketAddr> + 'static, username: &str, password
     run_with_client(client, addr, username, password).await
 }
 
+pub async fn run_incoming<I>(incoming: I, username: &str, password: &str) -> Result<()>
+where
+    I: futures::stream::TryStream + Send + 'static,
+    I::Ok: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static + Unpin,
+    I::Error: Into<Box<dyn std::error::Error + Send + Sync>>, 
+{
+    let client = wf::Client::new();
+    run_incoming_with_client(client, incoming, username, password).await
+}
+
 pub async fn run_with_client(client: wf::Client, addr: impl Into<SocketAddr> + 'static, username: &str, password: &str) -> Result<()>
 {
     let listener = tokio::net::TcpListener::bind(addr.into()).await?;

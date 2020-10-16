@@ -1,8 +1,15 @@
 use eyre::Result;
 use std::net::SocketAddr;
+use std::net::ToSocketAddrs as _;
 use structopt::StructOpt;
+use tokio::stream::StreamExt as _;
 use tracing_subscriber;
 use waterfurnace_http_gateway;
+
+fn to_socket_addrs(src: &str) -> Result<Vec<SocketAddr>>
+{
+    Ok(src.to_socket_addrs()?.collect())
+}
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "wf_gateway", about = "WaterFurnace Symphony gateway")]
@@ -13,16 +20,8 @@ struct Opt {
     #[structopt(short, long)]
     password: String,
 
-    /*
-     * TODO:
-     * clap::Arg.validate
-     * -> net2::TcpBuilder 
-     * -> tokio::net::TcpStream.from_std
-     * -> and warp::Server.serve_incoming
-     * to bind to multiple addresses (incl. localhost IPv4/6)
-     */
-    #[structopt(short, long, default_value = "127.0.0.1:3030")]
-    listen: SocketAddr,
+    #[structopt(short, long, default_value = "localhost:3030", parse(try_from_str = to_socket_addrs))]
+    listen: Vec<Vec<SocketAddr>>,
 }
 
 #[tokio::main]
@@ -31,7 +30,14 @@ async fn main() -> Result<()> {
 
     let config = Opt::from_args();
 
-    waterfurnace_http_gateway::run(config.listen.clone(), &config.username, &config.password).await?;
+    let mut stream_map = tokio::stream::StreamMap::new();
+    for addr in config.listen.iter().flatten() {
+        stream_map.insert(addr.to_string(), tokio::net::TcpListener::bind(addr).await?);
+    }
+    let listen_addrs: Vec<String> = stream_map.keys().cloned().collect();
+    println!("Listening on {}", listen_addrs.join(", "));
+    let listeners = stream_map.map(|(_, s)| s);
+    waterfurnace_http_gateway::run_incoming(listeners, &config.username, &config.password).await?;
 
     Ok(())
 }
