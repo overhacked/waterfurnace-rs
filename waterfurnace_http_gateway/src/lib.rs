@@ -3,6 +3,8 @@ mod handlers;
 mod routes;
 
 use backoff::{ExponentialBackoff, backoff::Backoff};
+use futures::future;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{
     Arc,
@@ -32,24 +34,34 @@ pub async fn run_incoming<I>(incoming: I, username: &str, password: &str) -> Res
 where
     I: futures::stream::TryStream + Send + 'static,
     I::Ok: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static + Unpin,
-    I::Error: Into<Box<dyn std::error::Error + Send + Sync>>, 
+    I::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     let client = wf::Client::new();
-    run_incoming_with_client(client, incoming, username, password).await
+    run_incoming_with_client_graceful_shutdown(client, incoming, future::pending(), username, password).await
+}
+
+pub async fn run_incoming_graceful_shutdown<I>(incoming: I, shutdown: impl Future<Output = ()> + Send + 'static, username: &str, password: &str) -> Result<()>
+where
+    I: futures::stream::TryStream + Send + 'static,
+    I::Ok: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static + Unpin,
+    I::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let client = wf::Client::new();
+    run_incoming_with_client_graceful_shutdown(client, incoming, shutdown, username, password).await
 }
 
 pub async fn run_with_client(client: wf::Client, addr: impl Into<SocketAddr> + 'static, username: &str, password: &str) -> Result<()>
 {
     let listener = tokio::net::TcpListener::bind(addr.into()).await?;
-    run_incoming_with_client(client, listener, username, password).await
+    run_incoming_with_client_graceful_shutdown(client, listener, future::pending(), username, password).await
 }
 
-#[tracing::instrument(skip(client, incoming),fields(password = "********"))]
-pub async fn run_incoming_with_client<I>(client: wf::Client, incoming: I, username: &str, password: &str) -> Result<()>
+#[tracing::instrument(skip(client, incoming, shutdown),fields(password = "********"))]
+pub async fn run_incoming_with_client_graceful_shutdown<I>(client: wf::Client, incoming: I, shutdown: impl Future<Output = ()> + Send + 'static, username: &str, password: &str) -> Result<()>
 where
     I: futures::stream::TryStream + Send + 'static,
     I::Ok: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static + Unpin,
-    I::Error: Into<Box<dyn std::error::Error + Send + Sync>>, 
+    I::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     let client = Arc::new(client);
     let mut connect_h = spawn_connection(client.clone(), &username, &password);
@@ -63,7 +75,7 @@ where
         // type of spawn_connection
         Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(
             warp::serve(api)
-            .serve_incoming(incoming).await
+            .serve_incoming_with_graceful_shutdown(incoming, shutdown).await
         )
     });
 
@@ -115,6 +127,7 @@ where
                 match r {
                     Ok(_) => { /* requested server shutdown */
                         info!("Shutting down...");
+                        client.logout().await?;
                         return Ok(());
                     },
                     Err(_) => { /* serve panic, fail */
@@ -143,6 +156,8 @@ type Result<T> = std::result::Result<T, ServerError>;
 
 #[derive(Error, Debug)]
 pub enum ServerError {
+    #[error("Symphony connection error: {0}")]
+    ClientError(#[from] wf::ClientError),
     #[error("Client unexpectedly shut down")]
     ClientGone,
     #[error("Server thread panicked")]

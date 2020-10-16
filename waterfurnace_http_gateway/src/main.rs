@@ -1,4 +1,5 @@
 use eyre::Result;
+use std::sync::Arc;
 use std::net::SocketAddr;
 use std::net::ToSocketAddrs as _;
 use structopt::StructOpt;
@@ -37,7 +38,18 @@ async fn main() -> Result<()> {
     let listen_addrs: Vec<String> = stream_map.keys().cloned().collect();
     println!("Listening on {}", listen_addrs.join(", "));
     let listeners = stream_map.map(|(_, s)| s);
-    waterfurnace_http_gateway::run_incoming(listeners, &config.username, &config.password).await?;
 
+    let shutdown_tx = Arc::new(tokio::sync::Notify::new());
+    let shutdown_rx = shutdown_tx.clone();
+    ctrlc::set_handler(move || {
+        shutdown_tx.notify();
+    }).expect("Error setting Ctrl-C handler");
+
+    waterfurnace_http_gateway::run_incoming_graceful_shutdown(
+        listeners,
+        async move { shutdown_rx.notified().await; },
+        &config.username,
+        &config.password
+    ).await?;
     Ok(())
 }
