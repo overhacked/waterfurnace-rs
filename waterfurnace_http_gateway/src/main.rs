@@ -16,12 +16,15 @@ fn to_socket_addrs(src: &str) -> Result<Vec<SocketAddr>>
 #[structopt(name = "wf_gateway", about = "WaterFurnace Symphony gateway")]
 struct Opt {
     #[structopt(short, long)]
+    /// Username to log into WaterFurnace Symphony
     username: String,
 
     #[structopt(short, long)]
+    /// Password to log into WaterFurnace Symphony
     password: String,
 
-    #[structopt(short, long, default_value = "localhost:3030", parse(try_from_str = to_socket_addrs))]
+    #[structopt(short, long, default_value = "localhost:3030", parse(try_from_str = to_socket_addrs), value_name = "{ IPv4 | '['IPv6']' | Hostname }:Port")]
+    /// Address and port to listen on
     listen: Vec<Vec<SocketAddr>>,
 
     #[cfg(feature = "gelf")]
