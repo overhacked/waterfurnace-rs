@@ -7,26 +7,26 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1.41"
+async-trait = "0.1"
 backoff = { version = "0.2", features = ["tokio"] }
-cached = "0.19.0"
-ctrlc = { version = "3.1.7", features = ["termination"] }
-eyre = "0.6.1"
-futures = "0.3.6"
+cached = "0.19"
+ctrlc = { version = "3.1", features = ["termination"] }
+eyre = "0.6"
+futures = "0.3"
 ready_waiter = { path = "../ready_waiter" }
-serde = "1.0.116"
-serde_json = "1.0.58"
-structopt = "0.3.19"
-thiserror = "1.0.21"
-tokio = { version = "0.2.22", features = ["rt-threaded", "tcp", "time", "macros"] }
-tracing = "0.1.21"
-tracing-futures = "0.2.4"
-tracing-subscriber = "0.2.13"
+serde = "1.0"
+serde_json = "1.0"
+structopt = "0.3"
+thiserror = "1.0"
+tokio = { version = "0.2", features = ["rt-threaded", "tcp", "time", "macros"] }
+tracing = "0.1"
+tracing-futures = "0.2"
+tracing-subscriber = "0.2"
 warp = "0.2"
 waterfurnace_symphony = { path = "../", version = "0.1" }
 
 [dev-dependencies]
 mock_symphony = { path = "../mock_symphony" }
-reqwest = "0.10.8"
-tokio-test = "0.2.1"
+reqwest = "0.10"
+tokio-test = "0.2"
 url = "2.1"
