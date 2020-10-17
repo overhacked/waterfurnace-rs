@@ -31,8 +31,7 @@ use crate::session::{
 const LOGIN_URI: &str = "https://symphony.mywaterfurnace.com/account/login";
 const AWLCONFIG_URI: &str = "https://symphony.mywaterfurnace.com/assets/js/awlconfig.js.php";
 // Taken from setTimeout(1500000, ...) in Symphony JavaScript
-//const SESSION_TIMEOUT: Duration = Duration::from_millis(1500000);
-const SESSION_TIMEOUT: Duration = Duration::from_secs(30); // DEBUG
+const SESSION_TIMEOUT: Duration = Duration::from_millis(1500000);
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
