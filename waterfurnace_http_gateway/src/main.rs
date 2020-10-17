@@ -89,7 +89,11 @@ fn init_tracing(
     let registry = registry.with(
         match gelf_addr {
             Some(addr) => {
-                let (layer, task) = Gelf::builder().connect_udp(addr).unwrap();
+                let (layer, task) = Gelf::builder()
+                    .buffer(2048)
+                    .file_names(false)
+                    .connect_udp(addr)
+                    .unwrap();
                 tokio::spawn(task);
                 Some(layer)
             },
