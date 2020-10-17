@@ -67,6 +67,8 @@ where
     let mut connect_h = spawn_connection(client.clone(), &username, &password);
 
     let mut backoff = ExponentialBackoff::default();
+    backoff.max_elapsed_time = None;
+
     let ready = Arc::new(AtomicBool::new(true));
     let api = routes::all(&client, Arc::clone(&ready));
 
