@@ -23,13 +23,21 @@ struct Opt {
 
     #[structopt(short, long, default_value = "localhost:3030", parse(try_from_str = to_socket_addrs))]
     listen: Vec<Vec<SocketAddr>>,
+
+    #[cfg(feature = "gelf")]
+    #[structopt(long, value_name = "{ IPv4 | '['IPv6']' }:Port")]
+    /// A GELF UDP socket to send trace events to
+    gelf: Option<SocketAddr>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
     let config = Opt::from_args();
+
+    init_tracing(
+        #[cfg(feature = "gelf")]
+        config.gelf,
+    );
 
     let mut stream_map = tokio::stream::StreamMap::new();
     for addr in config.listen.iter().flatten() {
@@ -52,4 +60,39 @@ async fn main() -> Result<()> {
         &config.password
     ).await?;
     Ok(())
+}
+
+fn init_tracing(
+    #[cfg(feature = "gelf")]
+    gelf_addr: Option<SocketAddr>,
+) {
+    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::prelude::*;
+    #[cfg(feature = "gelf")]
+    use tracing_gelf::Logger as Gelf;
+
+    let fmt_layer = fmt::layer();
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("warn"))
+        .unwrap();
+
+    let registry = tracing_subscriber::registry();
+
+    let registry = registry
+        .with(filter_layer)
+        .with(fmt_layer);
+
+    #[cfg(feature = "gelf")]
+    let registry = registry.with(
+        match gelf_addr {
+            Some(addr) => {
+                let (layer, task) = Gelf::builder().connect_udp(addr).unwrap();
+                tokio::spawn(task);
+                Some(layer)
+            },
+            _ => { None },
+        }
+    );
+
+    registry.init();
 }
