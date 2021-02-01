@@ -215,7 +215,7 @@ impl Client {
     async fn process_message(&self, message: Message) {
         // Silently discard all non-Text message types
         if let Message::Text(json) = message {
-            trace!(%json);
+            trace!(%json, "received websockets message");
             match serde_json::from_str::<Response>(&json) {
                 Ok(response) => self.commit_transaction(response).await,
                 Err(e) => {
@@ -406,7 +406,7 @@ impl Client {
         let socket_lock = self.socket.lock().await;
         let socket = socket_lock.as_ref().ok_or(ClientError::CommandFailed("Socket disconnected".to_string()))?;
         let json = serde_json::to_string(&request).unwrap();
-        trace!(%json);
+        trace!(%json, "sent websockets message");
         socket.send(json)
             .map_err(ClientError::SendError)?;
 
