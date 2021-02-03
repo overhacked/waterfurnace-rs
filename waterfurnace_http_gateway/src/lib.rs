@@ -3,7 +3,7 @@ mod handlers;
 mod routes;
 
 use backoff::{ExponentialBackoff, backoff::Backoff};
-use futures::future;
+use futures::future::{self, FutureExt};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{
@@ -65,11 +65,12 @@ where
 {
     let client = Arc::new(client);
     let mut connect_h = spawn_connection(client.clone(), &username, &password);
+    let mut ready_h = Box::pin(client.wait_ready().fuse());
 
     let mut backoff = ExponentialBackoff::default();
     backoff.max_elapsed_time = None;
 
-    let ready = Arc::new(AtomicBool::new(true));
+    let ready = Arc::new(AtomicBool::new(false));
     let api = routes::all(&client, Arc::clone(&ready));
 
     let serve_h = tokio::spawn(async move {
@@ -85,16 +86,16 @@ where
 
     loop {
         tokio::select! {
-            Ok(r) = connect_h => {
+            Ok(r) = &mut connect_h => {
+                // Set the server to an unready state, so it
+                // can start serving errors to HTTP clients
+                ready.store(false, Ordering::Release);
+
                 match r {
                     Ok(_) => { /* requested client shutdown */
                         return Err(ServerError::ClientGone);
                     },
                     Err(client_err) => { /* client error, retry */
-                        // Set the server to an unready state, so it
-                        // can start serving errors to HTTP clients
-                        ready.store(false, Ordering::Release);
-
                         // Get the next backoff interval
                         let next_backoff = match backoff.next_backoff() {
                             Some(duration) => duration,
@@ -102,28 +103,25 @@ where
                         };
 
                         warn!(err = ?client_err, "Symphony client error, retrying after {:?}", next_backoff);
-                        // Re-spawn the connection
-                        connect_h = spawn_connection(client.clone(), &username, &password);
+                        tokio::time::delay_for(next_backoff).await;
 
-                        // Wait for the client to be in a ready state,
-                        // at MOST as long as the next backoff interval,
-                        // and reset the backoff timer once the client is ready.
-                        //
                         // Any errors from Client::connect() will be picked up
                         // by future::try_select(...) in the next iteration of the loop,
                         // so the retry loop will continue until backoff.next_backoff()
                         // returns None (currently never, until a config flag is added)
-                        if let Ok(_) = client.wait_ready_timeout(next_backoff).await {
-                            info!("Client ready again, enabling gateway routes");
-                            // Tell the server to start serving requests normally
-                            ready.store(true, Ordering::Release);
-
-                            // Reset the backoff timer so the next failure has
-                            // a short retry interval, again
-                            backoff.reset();
-                        }
+                        connect_h = spawn_connection(client.clone(), &username, &password);
+                        ready_h = Box::pin(client.wait_ready().fuse());
                     },
                 }
+            },
+            _ = &mut ready_h => {
+                info!("Client ready again, enabling gateway routes");
+                // Tell the server to start serving requests normally
+                ready.store(true, Ordering::Release);
+
+                // Reset the backoff timer so the next failure has
+                // a short retry interval, again
+                backoff.reset();
             },
             Ok(r) = &mut serve_h => {
                 match r {
