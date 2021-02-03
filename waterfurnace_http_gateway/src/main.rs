@@ -13,7 +13,7 @@ fn to_socket_addrs(src: &str) -> Result<Vec<SocketAddr>>
 }
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "wf_gateway", about = "WaterFurnace Symphony gateway")]
+#[structopt(about, version = env!("GIT_DESCRIBE"))]
 struct Opt {
     #[structopt(short, long)]
     /// Username to log into WaterFurnace Symphony
