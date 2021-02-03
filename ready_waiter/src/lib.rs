@@ -48,18 +48,16 @@ impl Waiter {
 
     #[tracing::instrument(skip(self), level = "trace")]
     pub async fn wait(&self, is_ready: bool) {
-        debug!("waiting");
         let mut rx = self.ready_rx.clone();
         loop {
             match rx.recv().await {
                 None => panic!("self.ready_tx should not be dropped"),
                 Some(v) if v == is_ready => {
-                    debug!("done waiting");
+                    debug!("got is_ready == {:?}", v);
                     break
                 },
                 Some(v) => {
-                    trace!("saw {:?}", v);
-                    continue
+                    debug!("waiting for is_ready == {:?}, saw {:?}", is_ready, v);
                 },
             }
         }
