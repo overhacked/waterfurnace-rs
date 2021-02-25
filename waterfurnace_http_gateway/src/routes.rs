@@ -23,6 +23,7 @@ pub fn all(client: &Arc<wf::Client>, ready: Arc<AtomicBool>) -> impl Filter<Extr
                 .or(zones(client))
                 .or(gateway_read(client))
                 .or(zone_details(client))
+                .with(warp::trace::request())
         )
         .recover(crate::handlers::rejection)
 }
