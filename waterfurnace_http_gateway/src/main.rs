@@ -15,11 +15,11 @@ fn to_socket_addrs(src: &str) -> Result<Vec<SocketAddr>>
 #[derive(Debug, StructOpt)]
 #[structopt(about, version = env!("GIT_DESCRIBE"))]
 struct Opt {
-    #[structopt(short, long)]
+    #[structopt(short, long, env = "WATERFURNACE_USER")]
     /// Username to log into WaterFurnace Symphony
     username: String,
 
-    #[structopt(short, long)]
+    #[structopt(short, long, env = "WATERFURNACE_PASSWORD", hide_env_values = true)]
     /// Password to log into WaterFurnace Symphony
     password: String,
 
