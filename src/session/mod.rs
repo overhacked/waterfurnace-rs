@@ -193,7 +193,7 @@ impl Session<state::Connected> {
     pub async fn send(&self, message: TungsteniteMessage)
         -> Result<()>
     {
-        trace!("Sending WebSockets message: {:?}", message);
+        trace!(?message, "Sending WebSockets message");
         let websocket_c = self.state.websocket.clone();
         let mut websocket_lock = websocket_c.lock().await;
         Ok(websocket_lock.send(message).await?)

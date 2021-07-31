@@ -8,7 +8,7 @@ use tokio::time::{timeout, Instant};
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tracing;
 use tracing_futures;
-use tracing::{trace, debug, info, warn, error};
+use tracing::{trace, debug, info, warn, error, field, Span, Instrument as _};
 
 pub use protocol::{
     Command,
@@ -170,7 +170,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self, session, tx_channel), level = "debug")]
+    #[tracing::instrument(skip(self, session, tx_channel), level = "trace")]
     async fn handle_messages(&self, session: Session<state::Connected>, tx_channel: &mut mpsc::UnboundedReceiver<String>)
         -> Result<Session<state::Connected>>
     {
@@ -180,14 +180,24 @@ impl Client {
                 next_result = session.next() => {
                     match next_result? {
                         Some(msg) => {
-                            debug!("Received message: {:?}", msg);
-                            self.process_message(msg).await;
+                            let message_span = tracing::info_span!(
+                                parent: None,
+                                "client receive",
+                                otel.kind = "consumer",
+                                messaging.system = "symphony",
+                                messaging.destination = "client",
+                                messaging.protocol = "WebSocket",
+                                messaging.conversation_id = field::Empty,
+                            );
+
+                            self.process_message(msg)
+                                .instrument(message_span)
+                                .await;
                         },
                         None => return Err(ClientError::ConnectionClosed),
                     }
                 },
                 Some(json) = tx_channel.recv() => {
-                    debug!("Sending message: {:?}", json);
                     if let Err(e) = session.send_text(json).await {
                         error!(error = %e, "failed to send message");
                     }
@@ -212,18 +222,28 @@ impl Client {
         Ok(session)
     }
 
+    // This function is instrumented, above, in the body of
+    // handle_messages, because the #[instrument] macro doesn't
+    // support the use of the parent argument to create a new
+    // root span for a function.
     async fn process_message(&self, message: Message) {
+        let span = Span::current();
+
         // Silently discard all non-Text message types
         if let Message::Text(json) = message {
             trace!(%json, "received websockets message");
             match serde_json::from_str::<Response>(&json) {
-                Ok(response) => self.commit_transaction(response).await,
+                Ok(response) => {
+                    span.record("messaging.conversation_id", &response.transaction_id());
+                    self.commit_transaction(response).await;
+                },
                 Err(e) => {
                     // try to recover by getting just the transaction_id
                     // and error out of the response
                     match serde_json::from_str::<protocol::ResponseMeta>(&json) {
                         Ok(err_meta) => {
-                            let err_message = if let Some(s) = err_meta.error { s } else { "".to_string() };
+                            let err_message = err_meta.error.unwrap_or("".to_string());
+                            span.record("messaging.conversation_id", &err_meta.transaction_id);
                             error!(transaction_id = %err_meta.transaction_id, error = %err_message, "Symphony error");
                             self.cancel_transaction(err_meta.transaction_id).await;
                         },
@@ -240,7 +260,17 @@ impl Client {
         transactions_lock.list.remove(&transaction_id)
     }
 
-    #[tracing::instrument(skip(self, response), level = "trace")]
+    #[tracing::instrument(
+        skip(self, response),
+        level = "debug",
+        name = "client process",
+        fields(
+            otel.kind = "consumer",
+            messaging.system = "symphony",
+            messaging.destination = "client",
+            messaging.conversation_id = response.transaction_id(),
+        ),
+    )]
     async fn commit_transaction(&self, response: Response) {
         let transaction = self.find_transaction(response.transaction_id()).await;
         match transaction {
@@ -296,7 +326,7 @@ impl Client {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, session_id), fields(symphony.session_id = session_id))]
     async fn login(&self, session_id: &str)
         -> Result<()>
     {
@@ -341,7 +371,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self), level = "debug")]
+    #[tracing::instrument(skip(self, awl_id), fields(symphony.awl_id = awl_id))]
     pub async fn gateway_read(&self, awl_id: &str)
         -> Result<ReadResponse>
     {
@@ -392,15 +422,29 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self, command), level = "trace")]
+    #[tracing::instrument(
+        skip(self, command),
+        level = "info",
+        name = "symphony send",
+        fields(
+            otel.kind = "producer",
+            messaging.system = "symphony",
+            messaging.destination = "symphony",
+            messaging.conversation_id,
+        ),
+    )]
     async fn send(&self, command: Command)
         -> Result<oneshot::Receiver<Result<Response>>>
     {
+        let span = Span::current();
+
         let request = protocol::Request {
             transaction_id: self.next_transaction_id().await?,
             command: command,
             source: protocol::COMMAND_SOURCE.to_string(),
         };
+
+        span.record("messaging.conversation_id", &request.transaction_id);
 
         let (sender, receiver) = oneshot::channel();
         let socket_lock = self.socket.lock().await;
@@ -433,7 +477,7 @@ impl Client {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self), level = "debug")]
+    #[tracing::instrument(skip(self))]
     async fn shutdown(&self) -> Result<()>
     {
         self.shutdown.set_ready();

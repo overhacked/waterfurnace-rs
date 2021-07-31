@@ -10,7 +10,7 @@ pub(crate) trait CachedClient {
 
 #[async_trait]
 impl CachedClient for wf::Client {
-    #[tracing::instrument(skip(self), level = "debug")]
+    #[tracing::instrument(skip(self))]
     async fn cached_gateway_read(&self, awl_id: &str) -> wf::Result<wf::ReadResponse> {
         cached_gateway_read_impl(self, awl_id).await
     }
