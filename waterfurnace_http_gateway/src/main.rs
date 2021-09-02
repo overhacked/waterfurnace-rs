@@ -4,8 +4,6 @@ use std::net::SocketAddr;
 use std::net::ToSocketAddrs as _;
 use structopt::StructOpt;
 use tokio::stream::StreamExt as _;
-use tracing_subscriber;
-use waterfurnace_http_gateway;
 
 fn to_socket_addrs(src: &str) -> Result<Vec<SocketAddr>>
 {

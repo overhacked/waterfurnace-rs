@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use cached::proc_macro::cached;
 use waterfurnace_symphony as wf;
-use tracing;
 
 #[async_trait]
 pub(crate) trait CachedClient {

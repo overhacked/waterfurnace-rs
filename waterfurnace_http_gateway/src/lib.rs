@@ -21,7 +21,6 @@ use tracing::{
     error,
 };
 use tracing_futures::Instrument as _;
-use warp;
 use waterfurnace_symphony as wf;
 
 pub async fn run(addr: impl Into<SocketAddr> + 'static, username: &str, password: &str) -> Result<()>
@@ -67,19 +66,21 @@ where
     let mut connect_h = spawn_connection(client.clone(), &username, &password);
     let mut ready_h = Box::pin(client.wait_ready().fuse());
 
-    let mut backoff = ExponentialBackoff::default();
-    backoff.max_elapsed_time = None;
+    let mut backoff = ExponentialBackoff {
+        max_elapsed_time: None,
+        .. Default::default()
+    };
 
     let ready = Arc::new(AtomicBool::new(false));
     let api = routes::all(&client, Arc::clone(&ready));
 
     let serve_h = tokio::spawn(async move {
+        let serve_result = warp::serve(api)
+            .serve_incoming_with_graceful_shutdown(incoming, shutdown)
+            .await;
         // Has to be wrapped in Ok() to match return
         // type of spawn_connection
-        Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(
-            warp::serve(api)
-            .serve_incoming_with_graceful_shutdown(incoming, shutdown).await
-        )
+        Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(serve_result)
     });
 
     tokio::pin!(serve_h);

@@ -101,7 +101,7 @@ pub async fn zones(request_awl_id: String, request_zone_id: Option<u8>, client: 
     // If an unknown gateway or zone ID specified, then
     // the result will be an empty Vec. Return 404 instead
     // of an empty result.
-    if response.len() == 0 {
+    if response.is_empty() {
         return Err(warp::reject::reject());
     }
 
@@ -128,12 +128,7 @@ pub async fn zone_details(request_awl_id: String, request_zone_id: u8, client: A
 
     // Strip the zone prefix
     let zone_metrics: ZoneMetrics<str> = zone_metrics.drain()
-        .filter_map(|(k, v)| {
-            match k.strip_prefix(&zone_prefix) {
-                Some(s) => Some((s, v,)),
-                None => None,
-            }
-        }).collect();
+        .filter_map(|(k, v)| k.strip_prefix(&zone_prefix).map(|s| (s, v,))).collect();
     let response = serde_json::to_string(&zone_metrics).unwrap();
     Ok(response)
 }
