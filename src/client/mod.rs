@@ -1,13 +1,10 @@
 pub mod protocol;
 
 use ready_waiter::Waiter;
-use serde_json;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::time::{timeout, Instant};
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
-use tracing;
-use tracing_futures;
 use tracing::{trace, debug, info, warn, error, field, Span, Instrument as _};
 
 pub use protocol::{
@@ -54,16 +51,15 @@ struct LoginData {
 impl From<protocol::LoginResponse> for LoginData {
     fn from(response: protocol::LoginResponse) -> Self {
         let mut zone_counts: HashMap<String, u8> = HashMap::new();
-        let locations = response.locations.clone();
-        for location in &locations {
+        for location in &response.locations {
             for gateway in &location.gateways {
                 zone_counts.insert(gateway.awl_id.clone(), gateway.max_zones);
             }
         }
 
         LoginData {
-            zone_counts: zone_counts,
-            locations: locations,
+            zone_counts,
+            locations: response.locations,
         }
     }
 }
@@ -242,7 +238,7 @@ impl Client {
                     // and error out of the response
                     match serde_json::from_str::<protocol::ResponseMeta>(&json) {
                         Ok(err_meta) => {
-                            let err_message = err_meta.error.unwrap_or("".to_string());
+                            let err_message = err_meta.error.unwrap_or_default();
                             span.record("messaging.conversation_id", &err_meta.transaction_id);
                             error!(transaction_id = %err_meta.transaction_id, error = %err_message, "Symphony error");
                             self.cancel_transaction(err_meta.transaction_id).await;
@@ -335,8 +331,8 @@ impl Client {
             session_id: session_id.to_string(),
         }).await?;
         let login_result = timeout(COMMAND_TIMEOUT, receiver).await
-            .map_err(|_| ClientError::CommandTimeout("login".to_string()))?
-            .or(Err(ClientError::CommandFailed("login".to_string())))?;
+            .map_err(|_| ClientError::CommandTimeout("login".to_string()))? // First handle any timeout error
+            .map_err(|_| ClientError::CommandFailed("login".to_string()))?; // Then, handle any error from the receiver
         let mut login_data = self.login_data.write().await;
         let login_response = login_result?;
         match login_response {
@@ -381,9 +377,8 @@ impl Client {
         let login_data_lock = self.login_data.read().await;
         let max_zones = match *login_data_lock {
             Some(ref data) => {
-                data.zone_counts.get(awl_id)
-                    .ok_or(ClientError::UnknownGateway(awl_id.to_string()))?
-                    .clone()
+                *data.zone_counts.get(awl_id)
+                    .ok_or_else(|| ClientError::UnknownGateway(awl_id.to_string()))?
             },
             None => return Err(ClientError::UnknownGateway(awl_id.to_string())),
         };
@@ -413,7 +408,7 @@ impl Client {
         let receiver = self.send(request).await?;
         let read_result = timeout(COMMAND_TIMEOUT, receiver).await
             .map_err(|_| ClientError::CommandTimeout("gateway_read".to_string()))?
-            .or(Err(ClientError::CommandFailed("gateway_read".to_string())))?;
+            .map_err(|_| ClientError::CommandFailed("gateway_read".to_string()))?;
         let read_response = read_result?;
 
         match read_response {
@@ -440,7 +435,7 @@ impl Client {
 
         let request = protocol::Request {
             transaction_id: self.next_transaction_id().await?,
-            command: command,
+            command,
             source: protocol::COMMAND_SOURCE.to_string(),
         };
 
@@ -448,7 +443,8 @@ impl Client {
 
         let (sender, receiver) = oneshot::channel();
         let socket_lock = self.socket.lock().await;
-        let socket = socket_lock.as_ref().ok_or(ClientError::CommandFailed("Socket disconnected".to_string()))?;
+        let socket = socket_lock.as_ref()
+            .ok_or_else(|| ClientError::CommandFailed("Socket disconnected".to_string()))?;
         let json = serde_json::to_string(&request).unwrap();
         trace!(%json, "sent websockets message");
         socket.send(json)
@@ -484,6 +480,12 @@ impl Client {
         self.shutdown.wait_unready_timeout(COMMAND_TIMEOUT).await
             .map_err(|_| ClientError::CommandTimeout("shutdown".to_string()))?;
         Ok(())
+    }
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -3,8 +3,6 @@ use mock_symphony::{
     Server,
 };
 
-use tracing_subscriber;
-
 use super::*;
 use super::state::LoggedIn as _;
 /*

@@ -29,9 +29,9 @@ where
     pub(super) fn new(failure_fn: F, delay_fn: D, mean_delay_ms: f64) -> Self {
         MessageHandler {
             last_tid: 0, // Client starts at 1
-            failure_fn: failure_fn,
-            delay_fn: delay_fn,
-            mean_delay_ms: mean_delay_ms,
+            failure_fn,
+            delay_fn,
+            mean_delay_ms,
         }
     }
 
@@ -111,7 +111,7 @@ where
                                     gateway_type: ResponseGatewayType::AWL,
                                     online: 1,
                                     max_zones: super::NUM_ZONES,
-                                    zone_names: zone_names,
+                                    zone_names,
                                 }],
                             }],
                         }
@@ -150,7 +150,7 @@ where
                     transaction_id: tid,
                     error: "".to_string(),
                     data: ResponseType::Read {
-                        awl_id: awl_id,
+                        awl_id,
                         metrics: rlist_response,
                     }
                 };
@@ -161,6 +161,8 @@ where
     }
 }
 
+// `source` field is not checked in tests, but is part of the Symphony API
+#[allow(dead_code)] 
 #[derive(Deserialize, Debug)]
 struct Request {
     #[serde(rename = "tid")]

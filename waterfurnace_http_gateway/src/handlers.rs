@@ -78,7 +78,7 @@ pub async fn zones(request_awl_id: String, request_zone_id: Option<u8>, client: 
                     gwid: &gateway.awl_id,
                     system_name: &gateway.description,
                     zone_id: *zone_id,
-                    zone_name: &zone_name,
+                    zone_name,
                 });
             }
         }

@@ -2,9 +2,8 @@ use thiserror::Error;
 
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use http::{HeaderMap, HeaderValue, header::{COOKIE}};
+use http::{HeaderMap, HeaderValue, header::COOKIE};
 use regex::Regex;
-use reqwest;
 use tokio_tungstenite::{
     self,
     tungstenite::{
@@ -18,7 +17,6 @@ use tokio::sync::{
     TryLockError,
 };
 use tracing::{self, trace, debug, info,};
-use tracing_futures;
 use url::Url;
 
 use std::sync::Arc;
@@ -156,14 +154,14 @@ impl Session<state::Login> {
         match re.find(&text) {
             None => Err(
                 SessionError::UnexpectedValue(
-                    format!("Could not find wss://* URI in {}", self.config_uri).to_string()
+                    format!("Could not find wss://* URI in {}", self.config_uri)
                 )
             ),
             Some(m) => {
                 debug!("Got WebSockets URI: {}", &m.as_str());
                 Url::parse(m.as_str())
                     .map_err(|e| SessionError::UnexpectedValue(
-                        format!("Could not parse URI ({:?}): {}", e, m.as_str()).to_string()
+                        format!("Could not parse URI ({:?}): {}", e, m.as_str())
                     ))
             },
         }
@@ -234,7 +232,7 @@ impl Session<state::Connected> {
 
         Ok(Session {
             state: state::Disconnected {
-                credentials: credentials,
+                credentials,
             },
             client: start_session.client,
             login_uri: start_session.login_uri,
