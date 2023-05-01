@@ -103,7 +103,7 @@ pub struct ResponseMeta {
     #[serde(rename = "err", default, deserialize_with="non_empty_str")]
     pub(super) error: Option<String>,
     #[serde(flatten)]
-    pub(super) extra: HashMap<String, Value>,
+    pub(super) _extra: HashMap<String, Value>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
