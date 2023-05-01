@@ -165,7 +165,8 @@ pub struct ResponseLoginGateway {
 
 #[derive(Deserialize, Debug, Clone)]
 pub enum ResponseGatewayType {
-    AWL,
+    #[serde(rename = "AWL")]
+    Awl,
     #[serde(other)]
     Other,
 }
