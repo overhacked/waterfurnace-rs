@@ -230,7 +230,7 @@ impl Client {
             trace!(%json, "received websockets message");
             match serde_json::from_str::<Response>(&json) {
                 Ok(response) => {
-                    span.record("messaging.conversation_id", &response.transaction_id());
+                    span.record("messaging.conversation_id", response.transaction_id());
                     self.commit_transaction(response).await;
                 },
                 Err(e) => {
@@ -239,7 +239,7 @@ impl Client {
                     match serde_json::from_str::<protocol::ResponseMeta>(&json) {
                         Ok(err_meta) => {
                             let err_message = err_meta.error.unwrap_or_default();
-                            span.record("messaging.conversation_id", &err_meta.transaction_id);
+                            span.record("messaging.conversation_id", err_meta.transaction_id);
                             error!(transaction_id = %err_meta.transaction_id, error = %err_message, "Symphony error");
                             self.cancel_transaction(err_meta.transaction_id).await;
                         },
@@ -439,7 +439,7 @@ impl Client {
             source: protocol::COMMAND_SOURCE.to_string(),
         };
 
-        span.record("messaging.conversation_id", &request.transaction_id);
+        span.record("messaging.conversation_id", request.transaction_id);
 
         let (sender, receiver) = oneshot::channel();
         let socket_lock = self.socket.lock().await;
