@@ -181,7 +181,7 @@ fn zone_name_list<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result
     let m: serde_json::Map<String, Value> = Deserialize::deserialize(d)?;
     let mut out = HashMap::<u8, String>::new();
     for (key, value) in m.iter() {
-        let index = match key.strip_prefix("z") {
+        let index = match key.strip_prefix('z') {
             None => continue,
             Some(k) => k.parse().or(Err(D::Error::custom("Invalid index")))?,
         };
