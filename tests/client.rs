@@ -6,7 +6,6 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing_subscriber;
 use tracing::info;
 
 use mock_symphony::{
@@ -101,6 +100,7 @@ async fn client_read() {
 }
 
 #[tokio::test]
+#[ignore = "slow to run every time"]
 async fn slow_server() {
     let _ = tracing_subscriber::fmt::try_init();
 

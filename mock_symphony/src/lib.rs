@@ -114,9 +114,10 @@ impl Chaos {
     }
 
     pub fn always_fail() -> Self {
-        let mut chaos = Self::default();
-        chaos.failure = FailProbability::always();
-        chaos
+        Chaos {
+            failure: FailProbability::always(),
+            ..Default::default()
+        }
     }
 
     pub fn fail_at(mut self, probability: FailProbability) -> Self {
@@ -142,14 +143,9 @@ impl Chaos {
                 Bound::Unbounded => None,
             }
         };
-        let start_abs = match abs_bound(End::Start, range.start_bound()) {
-            Some(b) => b,
-            None => 0,
-        };
-        let end_abs = match abs_bound(End::End, range.start_bound()) {
-            Some(b) => b,
-            None => panic!("delay_between_ms does not support unbounded range end, only start"),
-        };
+        let start_abs = abs_bound(End::Start, range.start_bound()).unwrap_or(0);
+        let end_abs = abs_bound(End::End, range.start_bound())
+            .expect("delay_between_ms does not support unbounded range end, only start");
         self.delay_min = Duration::from_millis(start_abs);
         self.delay_max = Duration::from_millis(end_abs);
         self
@@ -186,10 +182,10 @@ pub fn http_chaos(chaos: Chaos, port: Option<u16>) -> Server
 {
     //Spawn new runtime in thread to prevent reactor execution context conflict
     thread::spawn(move || {
-        let mut rt = runtime::Builder::new_current_thread()
+        let rt = runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("new rt");
+            .unwrap();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (addr, srv) = rt.block_on(async move {
@@ -289,13 +285,11 @@ fn logout_route() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Re
         .and(warp::query::raw())
         .map(|a: Option<warp::host::Authority>, qs: String| {
             assert!(qs == "op=logout");
-            let reply = warp::reply();
-            let reply = warp::reply::with_header(
-                reply,
+            warp::reply::with_header(
+                warp::reply(),
                 http::header::SET_COOKIE,
                 http::header::HeaderValue::from_str(&format!("sessionid=; Domain={}; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT", a.unwrap().host())).unwrap()
-            );
-            reply
+            )
         })
 }
 
@@ -343,9 +337,9 @@ async fn handle_rejection(err: warp::Rejection)
     let code =
         if err.is_not_found()
         { StatusCode::NOT_FOUND }
-        else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>()
+        else if err.find::<warp::reject::MethodNotAllowed>().is_some()
         { StatusCode::METHOD_NOT_ALLOWED }
-        else if let Some(_) = err.find::<ChaosError>()
+        else if err.find::<ChaosError>().is_some()
         { StatusCode::SERVICE_UNAVAILABLE }
         else {
         error!("unhandled custom rejection, returning 500 response: {:?}", err);
