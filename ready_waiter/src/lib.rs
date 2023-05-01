@@ -1,10 +1,8 @@
 use std::fmt;
 use std::time::Duration;
-use tokio;
 use tokio::sync::watch::{self, Sender, Receiver};
-use tokio::time::{timeout as tokio_timeout, Elapsed};
-use tracing::{self, trace, debug};
-use tracing_futures;
+use tokio::time::{timeout as tokio_timeout, error::Elapsed};
+use tracing::{self, trace};
 
 #[derive(Debug)]
 pub struct Waiter {
@@ -30,7 +28,7 @@ impl Waiter {
 
     #[tracing::instrument(skip(self), level = "trace")]
     pub fn set(&self, is_ready: bool) {
-        self.ready_tx.broadcast(is_ready).unwrap();
+        self.ready_tx.send(is_ready).unwrap();
         trace!("set value");
     }
 
@@ -49,18 +47,8 @@ impl Waiter {
     #[tracing::instrument(skip(self), level = "trace")]
     pub async fn wait(&self, is_ready: bool) {
         let mut rx = self.ready_rx.clone();
-        loop {
-            match rx.recv().await {
-                None => panic!("self.ready_tx should not be dropped"),
-                Some(v) if v == is_ready => {
-                    debug!("got is_ready == {:?}", v);
-                    break
-                },
-                Some(v) => {
-                    debug!("waiting for is_ready == {:?}, saw {:?}", is_ready, v);
-                },
-            }
-        }
+        rx.wait_for(|v| *v == is_ready).await
+            .expect("self.ready_tx should not be dropped");
     }
 
     pub async fn wait_timeout(&self, timeout: Duration, is_ready: bool)

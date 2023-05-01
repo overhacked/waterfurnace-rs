@@ -61,7 +61,7 @@ where
             let delay_ms = self.delay_fn.sample(&mut rand::thread_rng()) * self.mean_delay_ms;
             let delay = Duration::from_micros((delay_ms * 1000.0) as u64);
             debug!("Introducing websocket request delay = {:?}", delay);
-            tokio::time::delay_for(delay).await;
+            tokio::time::sleep(delay).await;
         }
 
         match request {

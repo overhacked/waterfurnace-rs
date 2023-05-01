@@ -33,7 +33,7 @@ async fn get_connected_client(server: &mock_symphony::Server)
     let client2 = Arc::clone(&client);
     let connect_h = tokio::spawn(async move { client2.connect("test_user".to_string(), "bad7a55".to_string()).await });
     
-    tokio::time::delay_for(Duration::from_millis(500)).await; // Wait for the connection to actually happen
+    tokio::time::sleep(Duration::from_millis(500)).await; // Wait for the connection to actually happen
 
     (client, connect_h,)
 }

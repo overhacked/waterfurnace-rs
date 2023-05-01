@@ -186,8 +186,7 @@ pub fn http_chaos(chaos: Chaos, port: Option<u16>) -> Server
 {
     //Spawn new runtime in thread to prevent reactor execution context conflict
     thread::spawn(move || {
-        let mut rt = runtime::Builder::new()
-            .basic_scheduler()
+        let mut rt = runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("new rt");
@@ -246,7 +245,7 @@ fn simulate_chaos(chaos: &Chaos) -> impl Filter<Extract = (), Error = warp::Reje
                 let delay_ms = delay_fn.sample(&mut rand::thread_rng()) * mean_delay_ms;
                 let delay = Duration::from_micros((delay_ms * 1000.0) as u64);
                 debug!("Introducing request delay = {:?}", delay);
-                tokio::time::delay_for(delay).await;
+                tokio::time::sleep(delay).await;
             }
             Ok(())
         })

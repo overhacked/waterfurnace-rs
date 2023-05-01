@@ -198,7 +198,7 @@ impl Client {
                         error!(error = %e, "failed to send message");
                     }
                 },
-                _ = tokio::time::delay_until(timeout_at) => {
+                _ = tokio::time::sleep_until(timeout_at) => {
                     info!("Planned session timeout");
                     self.ready.set_unready();
                     break;
